@@ -1,7 +1,9 @@
-.env
+.env*
 venv/
 *.tmp
 tmp_*.json
 sb_check_*.json
 *.log
 __pycache__/
+checker.py
+run.sh
