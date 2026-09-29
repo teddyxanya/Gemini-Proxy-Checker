@@ -7,3 +7,8 @@ sb_check_*.json
 __pycache__/
 checker.py
 run.sh
+sub.txt
+*.sub
+sync_subscription.py
+server_state.json
+.server_state.json
