@@ -12,3 +12,5 @@ sub.txt
 sync_subscription.py
 server_state.json
 .server_state.json
+awg_*
+e0f_*
