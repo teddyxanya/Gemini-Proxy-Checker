@@ -253,9 +253,13 @@ def check_web_stub(proxies: dict, timeout: int = 8) -> tuple[bool, str]:
         except Exception:
             pass
 
+        t0 = __import__("time").time()
         r = requests.get('https://gemini.google.com/app', headers=headers, proxies=proxies, timeout=timeout, allow_redirects=True)
+        elapsed = __import__("time").time() - t0
         if r.status_code != 200:
             return False, f"HTTP {r.status_code}"
+        if elapsed > 6.0:
+            return False, f"Too slow ({elapsed:.1f}s > 6s threshold)"
 
         if "unavailable" in r.url.lower():
             return False, f"Redirect: {r.url}"
