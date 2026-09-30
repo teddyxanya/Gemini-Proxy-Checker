@@ -235,29 +235,36 @@ def parse_node_xray(uri: str):
     return None, None
 
 
-def check_web_stub(proxies: dict, timeout: int = 10) -> tuple[bool, str]:
-    """
-    Connects to https://gemini.google.com/app via proxy and verifies regional availability.
-    Returns (is_available, details).
-    """
+def check_web_stub(proxies: dict, timeout: int = 8) -> tuple[bool, str]:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
         'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7'
     }
     try:
+        # Pre-check: Verify egress IP location via Cloudflare trace to prevent Russian leaks
+        cf_country = None
+        try:
+            cf_r = requests.get('https://cloudflare.com/cdn-cgi/trace', proxies=proxies, timeout=min(timeout, 4))
+            m_cf = re.search(r'loc=([A-Z]{2})', cf_r.text)
+            if m_cf:
+                cf_country = m_cf.group(1).upper()
+                if cf_country in BLOCKED_COUNTRIES:
+                    return False, f"Egress blocked ({cf_country})"
+        except Exception:
+            pass
+
         r = requests.get('https://gemini.google.com/app', headers=headers, proxies=proxies, timeout=timeout, allow_redirects=True)
         if r.status_code != 200:
             return False, f"HTTP {r.status_code}"
-            
+
         if "unavailable" in r.url.lower():
-            return False, f"Redirected to unavailable: {r.url}"
+            return False, f"Redirect: {r.url}"
 
         text_lower = r.text.lower()
         for kw in STUB_KEYWORDS:
             if kw in text_lower:
-                return False, f"Regional stub detected: '{kw}'"
+                return False, f"Stub: '{kw}'"
 
-        # Check WIZ_global_data
         country = None
         m = re.search(r'window\.WIZ_global_data\s*=\s*(\{.+?\});', r.text)
         if m:
@@ -277,16 +284,17 @@ def check_web_stub(proxies: dict, timeout: int = 10) -> tuple[bool, str]:
 
         if country:
             if country in BLOCKED_COUNTRIES:
-                return False, f"Geo-blocked region: {country}"
-            return True, f"Accessible (Country: {country})"
+                return False, f"Geo-blocked: {country}"
+            return True, f"Geo: {country}"
 
         if "BardChatUi" in r.text or "assistant-bard" in r.text:
-            return True, "Accessible (App bundle verified)"
+            if cf_country and cf_country not in BLOCKED_COUNTRIES:
+                return True, f"Bundle OK (CF: {cf_country})"
+            return False, "Bundle unverified (unknown country)"
 
-        return False, "Unverified page response"
-    except requests.exceptions.RequestException as e:
-        return False, f"Connection error: {type(e).__name__}"
-
+        return False, "Unverified response"
+    except Exception as e:
+        return False, f"Web error: {type(e).__name__}"
 
 def test_node_web(outbounds: list, timeout: int = 10) -> tuple[bool, str]:
     xray_bin = os.getenv("XRAY_BIN", "/usr/local/bin/xray")
