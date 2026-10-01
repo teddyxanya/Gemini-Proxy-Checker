@@ -269,6 +269,16 @@ def check_web_stub(proxies: dict, timeout: int = 8) -> tuple[bool, str]:
             if kw in text_lower:
                 return False, f"Stub: '{kw}'"
 
+        # PRIMARY CHECK: Google locale field (most reliable - reflects Google's VPN detection)
+        # Format: tm.LANG.HASH.BUILD.O","LOCALE","UI_LANG" where LOCALE is google domain suffix
+        # locale=ru means Google flagged this IP as Russian VPN → "Gemini not available"
+        locale_match = re.search(r'tm\.[\w]+\.[\w]+\.\d+\.O","(\w+)","(\w+)"', r.text)
+        if locale_match:
+            google_locale = locale_match.group(1)
+            BLOCKED_LOCALES = {"ru", "by", "cn", "ir", "kp", "cu", "sy"}
+            if google_locale.lower() in BLOCKED_LOCALES:
+                return False, f"Google VPN-blocked (locale={google_locale})"
+
         country = None
         m = re.search(r'window\.WIZ_global_data\s*=\s*(\{.+?\});', r.text)
         if m:
