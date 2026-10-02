@@ -673,6 +673,44 @@ def main():
     passed_both_nodes = [t for t in passed_web_nodes if t in passed_api_nodes]
     logger.info(f"Nodes passing BOTH web and API (GEMINI2): {len(passed_both_nodes)}/{total}")
     update_shadowrocket_conf(conf_path, passed_api_nodes, passed_both_nodes)
+    
+    # TELEGRAM NOTIFICATION LOGIC
+    state_file = "/opt/gemini-proxy-checker/checker_state.json"
+    old_state = {"api": [], "web": []}
+    if os.path.exists(state_file):
+        try:
+            with open(state_file, "r") as sf:
+                old_state = json.load(sf)
+        except Exception:
+            pass
+
+    old_web = set(old_state.get("web", []))
+    new_web = set(passed_both_nodes)
+
+    added_web = new_web - old_web
+    lost_web = old_web - new_web
+
+    if added_web or lost_web:
+        lines = ["🤖 <b>Gemini Proxy Checker (Авто-Отчёт)</b>\n"]
+        lines.append(f"<b>Всего серверов (Web + API):</b> {len(new_web)}")
+        if added_web:
+            lines.append("\n✅ <b>Новые рабочие серверы:</b>")
+            for w in added_web:
+                lines.append(f"  • <code>{w}</code>")
+        if lost_web:
+            lines.append("\n❌ <b>Отвалившиеся серверы:</b>")
+            for w in lost_web:
+                lines.append(f"  • <code>{w}</code>")
+        
+        send_telegram_alert("\n".join(lines))
+
+    # Save new state
+    try:
+        with open(state_file, "w") as sf:
+            json.dump({"api": passed_api_nodes, "web": passed_both_nodes}, sf)
+    except Exception as e:
+        logger.error(f"Failed to save state: {e}")
+
     logger.info("Dual checker run finished successfully.")
 
 
