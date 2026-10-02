@@ -20,22 +20,10 @@ import socket
 import logging
 
 import requests
-def send_telegram_alert(message: str):
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
-    if not token or not chat_id:
-        return
-    try:
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
-        requests.post(url, json={"chat_id": chat_id, "text": message, "parse_mode": "HTML", "disable_web_page_preview": True}, timeout=10)
-    except Exception as e:
-        logger.error(f"Telegram alert error: {e}")
-
 import tempfile
 import subprocess
 import urllib.parse
 from pathlib import Path
-import requests
 
 # Base template matching user's latest github shadowrocket.conf
 DEFAULT_TEMPLATE = """# Shadowrocket: 2026-09-24 22:49:04
@@ -125,6 +113,21 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S"
 )
 logger = logging.getLogger("gemini-proxy-checker")
+
+
+def send_telegram_alert(message: str):
+    """Отправляет HTML-сообщение в Telegram через Bot API."""
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    if not token or not chat_id:
+        return
+    try:
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        requests.post(url, json={"chat_id": chat_id, "text": message,
+                                 "parse_mode": "HTML", "disable_web_page_preview": True},
+                      timeout=10)
+    except Exception as e:
+        logger.error(f"Telegram alert error: {e}")
 
 RATE_LIMIT_DELAY = 4.2  # Ensures <= 15 RPM
 BLOCKED_COUNTRIES = {"RU", "BY", "CN", "IR", "KP", "CU", "SY"}
@@ -404,7 +407,6 @@ def check_web_stub(proxies: dict, timeout: int = 8) -> tuple[bool, str]:
         locale_match = re.search(r'tm\.[\w]+\.[\w]+\.\d+\.O","(\w+)","(\w+)"', r.text)
         if locale_match:
             google_locale = locale_match.group(1)
-            BLOCKED_LOCALES = {"ru", "by", "cn", "ir", "kp", "cu", "sy"}
             if google_locale.lower() in BLOCKED_LOCALES:
                 return False, f"Google VPN-blocked (locale={google_locale})"
 
@@ -675,7 +677,7 @@ def main():
     update_shadowrocket_conf(conf_path, passed_api_nodes, passed_both_nodes)
     
     # TELEGRAM NOTIFICATION LOGIC
-    state_file = "/opt/gemini-proxy-checker/checker_state.json"
+    state_file = Path(__file__).resolve().parent / "checker_state.json"
     old_state = {"api": [], "web": []}
     if os.path.exists(state_file):
         try:

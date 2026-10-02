@@ -683,11 +683,17 @@ def telegram_bot_worker():
                     chat_id = str(msg["chat"]["id"])
                     raw_text = msg.get("text", "").strip()
 
-                    # Auto-bind chat ID
+                    # Auto-bind chat ID and owner user_id (first ever sender becomes owner)
+                    sender_user_id = str(msg.get("from", {}).get("id", ""))
+                    owner_user_id = env_vars.get("TELEGRAM_OWNER_ID", "")
                     if not current_chat_id or current_chat_id != chat_id:
                         save_env_var("TELEGRAM_CHAT_ID", chat_id)
                         current_chat_id = chat_id
                         logger.info(f"Auto-bound Telegram Chat ID: {chat_id}")
+                    if not owner_user_id and sender_user_id:
+                        save_env_var("TELEGRAM_OWNER_ID", sender_user_id)
+                        owner_user_id = sender_user_id
+                        logger.info(f"Auto-bound Telegram Owner user_id: {sender_user_id}")
 
                     # Commands handling
                     parts = raw_text.split()
@@ -779,9 +785,13 @@ def telegram_bot_worker():
 
                     # 6. /sync
                     elif cmd == "/check":
-                        send_telegram_alert(tg_token, chat_id, "⏳ Запущена полная проверка прокси-серверов (Web + API).\nЭто займёт около 15-20 минут. Отчёт придёт автоматически по завершении!")
-                        import subprocess
-                        subprocess.Popen(["bash", "/opt/gemini-proxy-checker/run.sh"], cwd="/opt/gemini-proxy-checker")
+                        # Защита: только владелец бота может запускать проверку
+                        if owner_user_id and sender_user_id != owner_user_id:
+                            send_telegram_alert(tg_token, chat_id, "⛔ Команда /check доступна только владельцу бота.")
+                        else:
+                            send_telegram_alert(tg_token, chat_id, "⏳ Запущена полная проверка прокси-серверов (Web + API).\nЭто займёт около 15-20 минут. Отчёт придёт автоматически по завершении!")
+                            import subprocess
+                            subprocess.Popen(["bash", "/opt/gemini-proxy-checker/run.sh"], cwd="/opt/gemini-proxy-checker")
 
                     # 7. /sync
                     elif cmd == "/sync":
