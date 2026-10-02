@@ -641,6 +641,21 @@ def main():
         logger.error(f"Failed to fetch subscription: {e}")
         sys.exit(1)
 
+    quick_check = os.getenv("QUICK_CHECK") == "1"
+    quick_nodes = set(os.getenv("QUICK_NODES", "").split(",")) if quick_check else set()
+    
+    if quick_check and quick_nodes:
+        filtered_nodes = []
+        for uri in raw_nodes:
+            tag, _ = parse_node_xray(uri)
+            if tag in quick_nodes:
+                filtered_nodes.append(uri)
+        raw_nodes = filtered_nodes
+        if not raw_nodes:
+            logger.info("Quick check nodes not found in subscription!")
+            sys.exit(0)
+        logger.info(f"Running QUICK CHECK for {len(raw_nodes)} nodes...")
+
     passed_api_nodes = []
     passed_web_nodes = []
     total = len(raw_nodes)
@@ -676,9 +691,9 @@ def main():
     logger.info(f"Nodes passing BOTH web and API (GEMINI2): {len(passed_both_nodes)}/{total}")
     update_shadowrocket_conf(conf_path, passed_api_nodes, passed_both_nodes)
     
-    # TELEGRAM NOTIFICATION LOGIC
+    # ------------------ STATE & NOTIFICATION LOGIC ------------------
     state_file = Path(__file__).resolve().parent / "checker_state.json"
-    old_state = {"api": [], "web": []}
+    old_state = {"api": [], "web": [], "history": []}
     if os.path.exists(state_file):
         try:
             with open(state_file, "r") as sf:
@@ -688,7 +703,26 @@ def main():
 
     old_web = set(old_state.get("web", []))
     new_web = set(passed_both_nodes)
+    
+    import datetime
+    now_ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+    quick_check = os.getenv("QUICK_CHECK") == "1"
+    
+    if quick_check:
+        quick_expected = set(os.getenv("QUICK_NODES", "").split(","))
+        lost_in_quick = quick_expected - new_web
+        if lost_in_quick:
+            logger.error(f"Quick check failed! Lost nodes: {lost_in_quick}")
+            sys.exit(1) # Triggers full check via bash
+        else:
+            logger.info("Quick check passed. Updating timestamp.")
+            old_state["last_check"] = now_ts
+            with open(state_file, "w") as sf:
+                json.dump(old_state, sf)
+            sys.exit(0)
+
+    # FULL CHECK LOGIC
     added_web = new_web - old_web
     lost_web = old_web - new_web
 
@@ -706,10 +740,25 @@ def main():
         
         send_telegram_alert("\n".join(lines))
 
-    # Save new state
+    # UPDATE HISTORY
+    history = old_state.get("history", [])
+    history.insert(0, {
+        "ts": now_ts,
+        "web": passed_both_nodes,
+        "api": passed_api_nodes
+    })
+    history = history[:48] # Keep 48 entries
+
+    new_state = {
+        "api": passed_api_nodes,
+        "web": passed_both_nodes,
+        "last_check": now_ts,
+        "history": history
+    }
+
     try:
         with open(state_file, "w") as sf:
-            json.dump({"api": passed_api_nodes, "web": passed_both_nodes}, sf)
+            json.dump(new_state, sf)
     except Exception as e:
         logger.error(f"Failed to save state: {e}")
 

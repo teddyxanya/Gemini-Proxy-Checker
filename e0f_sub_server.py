@@ -40,6 +40,13 @@ BASE_DIR = Path(__file__).resolve().parent
 ENV_FILE = BASE_DIR / ".env"
 PROFILES_FILE = BASE_DIR / "profiles.json"
 STATE_FILE = BASE_DIR / "protocols_state.json"
+CHECKER_STATE_FILE = BASE_DIR / "checker_state.json"
+
+
+def get_vps_base_url() -> str:
+    """Returns base HTTPS URL using VPS_IP from env, fallback to localhost"""
+    vps_ip = os.getenv("VPS_IP", "194.87.196.158")
+    return f"https://{vps_ip}:8443"
 API_BASE = "https://e0f.cx/api"
 
 # Cache: { sub_token: { "b64": str, "name": str, "awg_count": int, "total_count": int } }
@@ -725,7 +732,7 @@ def telegram_bot_worker():
                             if "error" in res:
                                 send_telegram_alert(tg_token, chat_id, f"❌ Ошибка: {res['error']}")
                             else:
-                                sub_url = f"http://YOUR_VPS_IP:8088/sub?token={res['sub_token']}"
+                                sub_url = f"{get_vps_base_url()}/sub?token={res['sub_token']}"
                                 lines = [
                                     f"✅ <b>Профиль «{res['name']}» успешно создан!</b>\n",
                                     "🔗 <b>Ссылка подписки для Shadowrocket:</b>",
@@ -762,7 +769,7 @@ def telegram_bot_worker():
                         lines = ["📋 <b>Активные профили подписок:</b>\n"]
                         for k, p in profiles.items():
                             p_name = p["name"]
-                            sub_url = f"http://YOUR_VPS_IP:8088/sub?token={p['sub_token']}"
+                            sub_url = f"{get_vps_base_url()}/sub?token={p['sub_token']}"
                             info = profile_cache.get(p["sub_token"], {})
                             total = info.get("total_count", 0)
                             awg = info.get("awg_count", 0)
@@ -772,15 +779,55 @@ def telegram_bot_worker():
 
                     # 5. /status
                     elif cmd == "/status":
+                        lines = ["📊 <b>Статус Gemini Checker</b>\n"]
+                        # Gemini checker state
+                        checker_state = {}
+                        if CHECKER_STATE_FILE.exists():
+                            try:
+                                with open(CHECKER_STATE_FILE, "r") as csf:
+                                    checker_state = json.load(csf)
+                            except Exception:
+                                pass
+                        gemini_nodes = checker_state.get("web", [])
+                        last_check_str = checker_state.get("last_check", "")
+                        if gemini_nodes:
+                            lines.append(f"✅ <b>Рабочие серверы (Web+API): {len(gemini_nodes)}</b>")
+                            for node in gemini_nodes[:10]:
+                                lines.append(f"  • {node}")
+                            if len(gemini_nodes) > 10:
+                                lines.append(f"  ... и ещё {len(gemini_nodes) - 10}")
+                        else:
+                            lines.append("❌ <b>Нет рабочих Gemini серверов</b>")
+                        if last_check_str:
+                            lines.append(f"\n⏱ Последняя проверка: {last_check_str}")
+                        # Calculate next cron run (every 3 hours from midnight UTC)
+                        import datetime as _dt
+                        now_utc = _dt.datetime.utcnow()
+                        hour = now_utc.hour
+                        next_h = ((hour // 3) + 1) * 3
+                        if next_h >= 24:
+                            next_check = now_utc.replace(hour=0, minute=0, second=0, microsecond=0) + _dt.timedelta(days=1)
+                        else:
+                            next_check = now_utc.replace(hour=next_h, minute=0, second=0, microsecond=0)
+                        delta = next_check - now_utc
+                        mins_left = int(delta.total_seconds() // 60)
+                        h_left, m_left = divmod(mins_left, 60)
+                        if h_left > 0:
+                            eta_str = f"{h_left}ч {m_left}мин"
+                        else:
+                            eta_str = f"{m_left}мин"
+                        lines.append(f"🕐 Следующая проверка: через {eta_str}")
+                        # Subscriptions
                         profiles = load_profiles()
-                        lines = ["📊 <b>Статус подписок и серверов:</b>\n"]
+                        lines.append("\n📦 <b>Подписки:</b>")
                         for k, p in profiles.items():
                             p_name = p["name"]
                             info = profile_cache.get(p["sub_token"], {})
                             total = info.get("total_count", 0)
                             awg = info.get("awg_count", 0)
-                            lines.append(f"👤 <b>{p_name}</b>: {total} серверов (AWG: {awg}, Доп: {total - awg})")
-                        lines.append(f"\n⏱ Последняя синхронизация: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(last_sync_time))}")
+                            lines.append(f"  👤 {p_name}: {total} серверов (AWG: {awg})")
+                        if last_sync_time:
+                            lines.append(f"\n⏱ Последняя синхронизация e0f: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(last_sync_time))}")
                         send_telegram_alert(tg_token, chat_id, "\n".join(lines))
 
                     # 6. /sync
@@ -803,6 +850,141 @@ def telegram_bot_worker():
         except Exception as e:
             logger.debug(f"Telegram polling exception: {e}")
             time.sleep(5)
+
+
+# =====================================================================
+# Web Status Page Builder
+# =====================================================================
+def build_status_page() -> str:
+    """Builds a public HTML status page with Gemini node health and subscription info."""
+    import datetime as _dt
+    checker_state = {}
+    if CHECKER_STATE_FILE.exists():
+        try:
+            with open(CHECKER_STATE_FILE, "r", encoding="utf-8") as f:
+                checker_state = json.load(f)
+        except Exception:
+            pass
+
+    gemini_web = checker_state.get("web", [])
+    gemini_api = checker_state.get("api", [])
+    last_check = checker_state.get("last_check", "Нет данных")
+    history = checker_state.get("history", [])
+
+    # Profiles count (no tokens exposed)
+    profiles = load_profiles()
+    profile_info = []
+    for p_id, p in profiles.items():
+        info = profile_cache.get(p["sub_token"], {})
+        profile_info.append({
+            "name": p["name"],
+            "total": info.get("total_count", 0),
+            "awg": info.get("awg_count", 0)
+        })
+
+    # Next cron
+    now_utc = _dt.datetime.utcnow()
+    hour = now_utc.hour
+    next_h = ((hour // 3) + 1) * 3
+    if next_h >= 24:
+        next_check_dt = now_utc.replace(hour=0, minute=0, second=0, microsecond=0) + _dt.timedelta(days=1)
+    else:
+        next_check_dt = now_utc.replace(hour=next_h, minute=0, second=0, microsecond=0)
+    delta = next_check_dt - now_utc
+    mins_left = int(delta.total_seconds() // 60)
+    h_left, m_left = divmod(mins_left, 60)
+    next_check_str = f"{next_h:02d}:00 UTC (через {h_left}ч {m_left}мин)" if h_left > 0 else f"{next_h:02d}:00 UTC (через {m_left}мин)"
+
+    # Build node rows
+    all_nodes = sorted(set(gemini_web + gemini_api))
+    node_rows = ""
+    for node in all_nodes:
+        web_ok = node in gemini_web
+        api_ok = node in gemini_api
+        web_dot = '<span class="dot green" title="Web OK">●</span>' if web_ok else '<span class="dot red" title="Web FAIL">●</span>'
+        api_dot = '<span class="dot green" title="API OK">●</span>' if api_ok else '<span class="dot red" title="API FAIL">●</span>'
+        node_rows += f'<tr><td class="node-name">{node}</td><td>{web_dot} Web</td><td>{api_dot} API</td></tr>\n'
+
+    if not node_rows:
+        node_rows = '<tr><td colspan="3" style="text-align:center;color:#888">Нет данных о нодах</td></tr>'
+
+    # Profile rows
+    prof_rows = ""
+    for p in profile_info:
+        prof_rows += f'<tr><td>👤 {p["name"]}</td><td>{p["total"]} серверов</td><td>AWG: {p["awg"]}</td></tr>\n'
+
+    # History table (last 5)
+    hist_rows = ""
+    for entry in history[:5]:
+        ts = entry.get("ts", "")
+        w = len(entry.get("web", []))
+        a = len(entry.get("api", []))
+        hist_rows += f'<tr><td>{ts}</td><td>{w}</td><td>{a}</td></tr>\n'
+
+    html = f"""<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="refresh" content="60">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gemini Proxy Checker — Статус</title>
+<style>
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{ background: #0d1117; color: #c9d1d9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 20px; }}
+  h1 {{ color: #58a6ff; font-size: 1.5em; margin-bottom: 8px; }}
+  h2 {{ color: #8b949e; font-size: 1em; margin: 20px 0 8px; text-transform: uppercase; letter-spacing: 1px; }}
+  .card {{ background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; margin-bottom: 16px; }}
+  .meta {{ color: #8b949e; font-size: 0.85em; margin-bottom: 16px; }}
+  table {{ width: 100%; border-collapse: collapse; font-size: 0.9em; }}
+  th {{ color: #8b949e; text-align: left; padding: 6px 10px; border-bottom: 1px solid #30363d; font-weight: normal; }}
+  td {{ padding: 6px 10px; border-bottom: 1px solid #21262d; }}
+  tr:last-child td {{ border-bottom: none; }}
+  .node-name {{ font-family: monospace; }}
+  .dot {{ font-size: 1.2em; }}
+  .dot.green {{ color: #3fb950; }}
+  .dot.red {{ color: #f85149; }}
+  .badge {{ display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.75em; font-weight: bold; }}
+  .badge.ok {{ background: #1a4731; color: #3fb950; }}
+  .badge.warn {{ background: #3d2f00; color: #e3b341; }}
+  .footer {{ color: #484f58; font-size: 0.75em; margin-top: 20px; text-align: center; }}
+  .summary {{ display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; }}
+  .stat {{ background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 12px 20px; text-align: center; }}
+  .stat .num {{ font-size: 2em; font-weight: bold; color: #3fb950; }}
+  .stat .label {{ font-size: 0.8em; color: #8b949e; margin-top: 4px; }}
+</style>
+</head>
+<body>
+<h1>🤖 Gemini Proxy Checker</h1>
+<p class="meta">Последняя проверка: <b>{last_check}</b> &nbsp;|&nbsp; Следующая: <b>{next_check_str}</b> &nbsp;|&nbsp; <span style="color:#484f58">Обновляется каждые 60 сек</span></p>
+
+<div class="summary">
+  <div class="stat"><div class="num">{len(gemini_web)}</div><div class="label">Web ноды</div></div>
+  <div class="stat"><div class="num">{len(gemini_api)}</div><div class="label">API ноды</div></div>
+  <div class="stat"><div class="num">{sum(p["total"] for p in profile_info)}</div><div class="label">Серверов в подписках</div></div>
+</div>
+
+<div class="card">
+<h2>Gemini Ноды</h2>
+<table>
+<tr><th>Нода</th><th>Web</th><th>API</th></tr>
+{node_rows}
+</table>
+</div>
+
+<div class="card">
+<h2>Подписки</h2>
+<table>
+<tr><th>Профиль</th><th>Серверов</th><th>AWG</th></tr>
+{prof_rows}
+</table>
+</div>
+
+{'<div class="card"><h2>История проверок</h2><table><tr><th>Время</th><th>Web нод</th><th>API нод</th></tr>' + hist_rows + '</table></div>' if hist_rows else ''}
+
+<p class="footer">gemini-proxy-checker &nbsp;•&nbsp; {now_utc.strftime('%Y-%m-%d %H:%M:%S')} UTC</p>
+</body>
+</html>"""
+    return html
 
 
 # =====================================================================
@@ -866,6 +1048,15 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
             self.wfile.write(sub_b64.encode('ascii'))
             return
 
+        # 4. Web status page (public)
+        if path == "/status":
+            html = build_status_page()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(html.encode("utf-8"))
+            return
+
         self.send_response(404)
         self.end_headers()
         self.wfile.write(b"Not Found")
@@ -897,7 +1088,7 @@ def run_server(port: int = 8088):
     t_tg = threading.Thread(target=telegram_bot_worker, daemon=True)
     t_tg.start()
 
-    server_address = ('0.0.0.0', port)
+    server_address = ('127.0.0.1', port)
     httpd = HTTPServer(server_address, SubscriptionHandler)
     logger.info("=" * 60)
     logger.info(f"e0f Telegram Subscription Service running on port {port}")
