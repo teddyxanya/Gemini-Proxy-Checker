@@ -131,6 +131,7 @@ def send_telegram_alert(message: str):
 
 RATE_LIMIT_DELAY = 4.2  # Ensures <= 15 RPM
 BLOCKED_COUNTRIES = {"RU", "BY", "CN", "IR", "KP", "CU", "SY"}
+BLOCKED_LOCALES = {"ru", "by", "cn", "ir", "kp", "cu", "sy"}
 
 STUB_KEYWORDS = [
     "isn't supported in your country",
