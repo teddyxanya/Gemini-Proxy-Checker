@@ -46,7 +46,7 @@ CHECKER_STATE_FILE = BASE_DIR / "checker_state.json"
 def get_vps_base_url() -> str:
     """Returns base HTTPS URL using VPS_IP from env, fallback to localhost"""
     vps_ip = os.getenv("VPS_IP", "194.87.196.158")
-    return f"https://{vps_ip}:8443"
+    return f"http://{vps_ip}:8081"
 API_BASE = "https://e0f.cx/api"
 
 # Cache: { sub_token: { "b64": str, "name": str, "awg_count": int, "total_count": int } }
