@@ -368,79 +368,84 @@ def parse_node_xray(uri: str):
     return None, None
 
 
-def check_web_stub(proxies: dict, timeout: int = 8) -> tuple[bool, str]:
+def check_web_stub(proxies: dict, timeout: int = 15) -> tuple[bool, str]:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
         'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7'
     }
-    try:
-        # Pre-check: Verify egress IP location via Cloudflare trace to prevent Russian leaks
-        cf_country = None
+    
+    last_err = ""
+    for attempt in range(2):
         try:
-            cf_r = requests.get('https://cloudflare.com/cdn-cgi/trace', proxies=proxies, timeout=min(timeout, 4))
-            m_cf = re.search(r'loc=([A-Z]{2})', cf_r.text)
-            if m_cf:
-                cf_country = m_cf.group(1).upper()
-                if cf_country in BLOCKED_COUNTRIES:
-                    return False, f"Egress blocked ({cf_country})"
-        except Exception:
-            pass
-
-        t0 = __import__("time").time()
-        r = requests.get('https://gemini.google.com/app', headers=headers, proxies=proxies, timeout=timeout, allow_redirects=True)
-        elapsed = __import__("time").time() - t0
-        if r.status_code != 200:
-            return False, f"HTTP {r.status_code}"
-        if elapsed > 6.0:
-            return False, f"Too slow ({elapsed:.1f}s > 6s threshold)"
-
-        if "unavailable" in r.url.lower():
-            return False, f"Redirect: {r.url}"
-
-        text_lower = r.text.lower()
-        for kw in STUB_KEYWORDS:
-            if kw in text_lower:
-                return False, f"Stub: '{kw}'"
-
-        # PRIMARY CHECK: Google locale field (most reliable - reflects Google's VPN detection)
-        # Format: tm.LANG.HASH.BUILD.O","LOCALE","UI_LANG" where LOCALE is google domain suffix
-        # locale=ru means Google flagged this IP as Russian VPN → "Gemini not available"
-        locale_match = re.search(r'tm\.[\w]+\.[\w]+\.\d+\.O","(\w+)","(\w+)"', r.text)
-        if locale_match:
-            google_locale = locale_match.group(1)
-            if google_locale.lower() in BLOCKED_LOCALES:
-                return False, f"Google VPN-blocked (locale={google_locale})"
-
-        country = None
-        m = re.search(r'window\.WIZ_global_data\s*=\s*(\{.+?\});', r.text)
-        if m:
+            cf_country = None
             try:
-                wiz = json.loads(m.group(1))
-                raw_geo = wiz.get("vXmutd", "")
-                geo_match = re.search(r'"([A-Z]{2})"', str(raw_geo))
-                if geo_match:
-                    country = geo_match.group(1)
+                cf_r = requests.get('https://cloudflare.com/cdn-cgi/trace', proxies=proxies, timeout=min(timeout, 5))
+                m_cf = re.search(r'loc=([A-Z]{2})', cf_r.text)
+                if m_cf:
+                    cf_country = m_cf.group(1).upper()
+                    if cf_country in BLOCKED_COUNTRIES:
+                        return False, f"Egress blocked ({cf_country})"
             except Exception:
                 pass
 
-        if not country:
-            fallback_match = re.search(r'vXmutd["\']?\s*[:=]\s*["\']?%\.@\.["\']([A-Z]{2})["\']', r.text)
-            if fallback_match:
-                country = fallback_match.group(1)
+            t0 = __import__("time").time()
+            r = requests.get('https://gemini.google.com/app', headers=headers, proxies=proxies, timeout=timeout, allow_redirects=True)
+            elapsed = __import__("time").time() - t0
+            
+            if r.status_code != 200:
+                last_err = f"HTTP {r.status_code}"
+                __import__("time").sleep(1)
+                continue
+                
+            if elapsed > 12.0:
+                last_err = f"Too slow ({elapsed:.1f}s > 12s)"
+                __import__("time").sleep(1)
+                continue
 
-        if country:
-            if country in BLOCKED_COUNTRIES:
-                return False, f"Geo-blocked: {country}"
-            return True, f"Geo: {country}"
+            if "unavailable" in r.url.lower():
+                return False, f"Redirect: {r.url}"
 
-        if "BardChatUi" in r.text or "assistant-bard" in r.text:
-            if cf_country and cf_country not in BLOCKED_COUNTRIES:
-                return True, f"Bundle OK (CF: {cf_country})"
-            return False, "Bundle unverified (unknown country)"
+            text_lower = r.text.lower()
+            for kw in STUB_KEYWORDS:
+                if kw in text_lower:
+                    return False, f"Stub: '{kw}'"
 
-        return False, "Unverified response"
-    except Exception as e:
-        return False, f"Web error: {type(e).__name__}"
+            locale_match = re.search(r'tm\.[\w]+\.[\w]+\.\d+\.O","(\w+)","(\w+)"', r.text)
+            if locale_match:
+                google_locale = locale_match.group(1)
+                if google_locale.lower() in BLOCKED_LOCALES:
+                    return False, f"Google VPN-blocked (locale={google_locale})"
+
+            country = None
+            m = re.search(r'window\.WIZ_global_data\s*=\s*(\{.+?\});', r.text)
+            if m:
+                try:
+                    import json
+                    wiz = json.loads(m.group(1))
+                    raw_geo = wiz.get("vXmutd", "")
+                    geo_match = re.search(r'"([A-Z]{2})"', str(raw_geo))
+                    if geo_match:
+                        country = geo_match.group(1)
+                except Exception:
+                    pass
+
+            if not country:
+                fallback_match = re.search(r'vXmutd["\']?\s*[:=]\s*["\']?%\.@\.["\']([A-Z]{2})["\']', r.text)
+                if fallback_match:
+                    country = fallback_match.group(1)
+
+            if country:
+                if country in BLOCKED_COUNTRIES:
+                    return False, f"Geo-blocked: {country}"
+                return True, f"Geo: {country}"
+                
+            return True, "Geo: UNKNOWN (but passed)"
+            
+        except requests.exceptions.RequestException as e:
+            last_err = f"Web error: {type(e).__name__}"
+            __import__("time").sleep(1)
+            
+    return False, last_err
 
 def check_api_inference(proxies: dict, gemini_key: str, timeout: int = 8) -> tuple[bool, str]:
     test_models = ["gemma-4-26b-a4b-it", "gemini-flash-lite-latest"]
