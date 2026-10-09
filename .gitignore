@@ -1,0 +1,25 @@
+.env
+venv/
+*.tmp
+tmp_*.json
+sb_check_*.json
+sb_chk_*.json
+xray_chk_*.json
+*.log
+__pycache__/
+*.pyc
+*.bak
+
+checker_state.json
+*server_state.json
+music_pending/
+protocols_state.json
+sub_cache_*.txt
+awg_*
+profiles.json
+
+# Scratch & test scripts
+patch*.py
+fix.py
+test_*.py
+inspect_*.py
