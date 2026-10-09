@@ -1516,6 +1516,18 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
                 return
 
             q = qs.get("q", [""])[0] or qs.get("track", [""])[0] or qs.get("query", [""])[0]
+            artist = qs.get("artist", [""])[0] or qs.get("performer", [""])[0] or qs.get("author", [""])[0]
+            title = qs.get("title", [""])[0] or qs.get("song", [""])[0] or qs.get("name", [""])[0]
+            if not q:
+                if artist and title:
+                    q = f"{artist} - {title}"
+                elif artist:
+                    q = artist
+                elif title:
+                    q = title
+            elif artist and title and (artist.lower() not in q.lower() or title.lower() not in q.lower()):
+                q = f"{artist} - {title}"
+
             if q:
                 current_chat_id = env_vars.get("TELEGRAM_CHAT_ID") or env_vars.get("TELEGRAM_OWNER_ID")
                 threading.Thread(target=search_and_prepare_music, args=(q, current_chat_id), daemon=True).start()
@@ -1533,7 +1545,7 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
                 self.send_response(400)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.end_headers()
-                self.wfile.write(json.dumps({"ok": False, "error": "Missing ?q= parameter"}).encode('utf-8'))
+                self.wfile.write(json.dumps({"ok": False, "error": "Missing ?q= or ?artist=&title= parameter"}).encode('utf-8'))
                 return
 
         self.send_response(404)
@@ -1555,6 +1567,9 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
             content_len = int(self.headers.get('Content-Length', 0))
             post_body = self.rfile.read(content_len).decode('utf-8', errors='ignore') if content_len > 0 else ""
             q = ""
+            artist = url_qs.get("artist", [""])[0] or url_qs.get("performer", [""])[0]
+            title = url_qs.get("title", [""])[0] or url_qs.get("song", [""])[0] or url_qs.get("name", [""])[0]
+
             req_token = (
                 url_qs.get("token", [""])[0] or
                 url_qs.get("key", [""])[0] or
@@ -1564,17 +1579,29 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
             if post_body:
                 try:
                     body_json = json.loads(post_body)
-                    q = body_json.get("query") or body_json.get("track") or body_json.get("title") or body_json.get("q")
+                    q = body_json.get("query") or body_json.get("track") or body_json.get("q")
+                    artist = artist or body_json.get("artist") or body_json.get("performer") or ""
+                    title = title or body_json.get("title") or body_json.get("song") or body_json.get("name") or ""
                     if not req_token:
                         req_token = body_json.get("token") or body_json.get("key")
                 except Exception:
                     body_qs = urllib.parse.parse_qs(post_body)
                     q = body_qs.get("q", [""])[0] or body_qs.get("track", [""])[0] or post_body.strip()
+                    artist = artist or body_qs.get("artist", [""])[0]
+                    title = title or body_qs.get("title", [""])[0]
                     if not req_token:
                         req_token = body_qs.get("token", [""])[0]
 
             if not q:
                 q = url_qs.get("q", [""])[0] or url_qs.get("track", [""])[0] or url_qs.get("query", [""])[0]
+
+            if not q and (artist or title):
+                if artist and title:
+                    q = f"{artist} - {title}"
+                elif artist:
+                    q = artist
+                elif title:
+                    q = title
 
             if shazam_secret and req_token != shazam_secret:
                 logger.warning(f"Unauthorized POST /shazam attempt from {self.client_address[0]}")
