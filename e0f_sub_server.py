@@ -15,6 +15,8 @@ e0f.cx Private Multi-Profile Telegram-Managed Subscription Daemon
 
 import os
 import sys
+import re
+import shutil
 import json
 import base64
 import time
@@ -746,7 +748,7 @@ def cleanup_old_pending_music(max_age_seconds: int = 7200):
         logger.debug(f"Pending music cleanup error: {e}")
 
 
-def search_and_prepare_music(query: str, reply_chat_id: str = None, reply_msg_id: int = None):
+def search_and_prepare_music(query: str, reply_chat_id: str = None, reply_msg_id: int = None, hint_artist: str = None, hint_title: str = None):
     """
     Searches track via yt-dlp, downloads 320k mp3 with artwork to PENDING_MUSIC_DIR,
     and sends audio file to user PM with [✅ Закинуть в канал] and [❌ Отмена] buttons.
@@ -814,8 +816,39 @@ def search_and_prepare_music(query: str, reply_chat_id: str = None, reply_msg_id
             else:
                 entry = info
 
-        title = entry.get('track') or entry.get('title') or clean_query
-        artist = entry.get('artist') or entry.get('uploader') or 'Музыка'
+        raw_title = entry.get('track') or entry.get('title') or clean_query
+        raw_artist = entry.get('artist') or entry.get('uploader') or ''
+
+        # 1. Clean and deduplicate Artist and Title
+        if hint_artist and hint_title:
+            artist = hint_artist.strip()
+            title = hint_title.strip()
+            # If title accidentally starts with artist (e.g. "Moby - Natural Blues"), strip it!
+            title = re.sub(rf"^{re.escape(artist)}\s*[-–—:]\s*", "", title, flags=re.IGNORECASE).strip()
+        else:
+            artist = raw_artist.strip()
+            title = raw_title.strip()
+
+            # Remove YouTube video junk: (Official Video), [Official Audio], (Lyric Video), etc.
+            title = re.sub(r'(?i)\s*[\(\[](?:official\s*(?:music\s*)?(?:video|audio|visualizer|lyric\s*video)?|audio|video|lyrics?|remastered|hq|hd|4k)[\)\]]', '', title).strip()
+
+            # If title is in format "Artist - Song", parse components
+            if " - " in title or " — " in title or " – " in title:
+                parts = re.split(r'\s*[-—–]\s*', title, 1)
+                p_artist, p_title = parts[0].strip(), parts[1].strip()
+                if not artist or artist.lower() in ("музыка", "topic") or "vevo" in artist.lower() or "records" in artist.lower() or artist.lower() == p_artist.lower():
+                    artist = p_artist
+                    title = p_title
+
+            # Strip duplicated artist if title still starts with artist name
+            if artist and title:
+                title = re.sub(rf"^{re.escape(artist)}\s*[-–—:]\s*", "", title, flags=re.IGNORECASE).strip()
+
+        if not artist or artist.lower() in ('музыка', 'topic'):
+            artist = 'Неизвестен'
+        if not title:
+            title = clean_query
+
         duration = int(entry.get('duration') or 0)
 
         mp3_files = list(track_dir.glob("*.mp3"))
@@ -1515,9 +1548,13 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({"ok": False, "error": "Forbidden: invalid or missing token"}).encode('utf-8'))
                 return
 
-            q = qs.get("q", [""])[0] or qs.get("track", [""])[0] or qs.get("query", [""])[0]
-            artist = qs.get("artist", [""])[0] or qs.get("performer", [""])[0] or qs.get("author", [""])[0]
-            title = qs.get("title", [""])[0] or qs.get("song", [""])[0] or qs.get("name", [""])[0]
+            q = (qs.get("q", [""])[0] or qs.get("track", [""])[0] or qs.get("query", [""])[0]).strip()
+            artist = (qs.get("artist", [""])[0] or qs.get("performer", [""])[0] or qs.get("author", [""])[0]).strip()
+            title = (qs.get("title", [""])[0] or qs.get("song", [""])[0] or qs.get("name", [""])[0]).strip()
+
+            if artist and title:
+                title = re.sub(rf"^{re.escape(artist)}\s*[-–—:]\s*", "", title, flags=re.IGNORECASE).strip()
+
             if not q:
                 if artist and title:
                     q = f"{artist} - {title}"
@@ -1525,12 +1562,18 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
                     q = artist
                 elif title:
                     q = title
-            elif artist and title and (artist.lower() not in q.lower() or title.lower() not in q.lower()):
-                q = f"{artist} - {title}"
+            else:
+                # Collapse any duplicated artist prefix like "Moby - Moby - Natural Blues"
+                q = re.sub(r'^(.*?)\s*[-–—:]\s*\1\s*[-–—:]\s*', r'\1 - ', q, flags=re.IGNORECASE).strip()
 
             if q:
                 current_chat_id = env_vars.get("TELEGRAM_CHAT_ID") or env_vars.get("TELEGRAM_OWNER_ID")
-                threading.Thread(target=search_and_prepare_music, args=(q, current_chat_id), daemon=True).start()
+                threading.Thread(
+                    target=search_and_prepare_music,
+                    args=(q, current_chat_id),
+                    kwargs={"hint_artist": artist if artist else None, "hint_title": title if title else None},
+                    daemon=True
+                ).start()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.end_headers()
@@ -1595,6 +1638,9 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
             if not q:
                 q = url_qs.get("q", [""])[0] or url_qs.get("track", [""])[0] or url_qs.get("query", [""])[0]
 
+            if artist and title:
+                title = re.sub(rf"^{re.escape(artist)}\s*[-–—:]\s*", "", title, flags=re.IGNORECASE).strip()
+
             if not q and (artist or title):
                 if artist and title:
                     q = f"{artist} - {title}"
@@ -1602,6 +1648,8 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
                     q = artist
                 elif title:
                     q = title
+            elif q:
+                q = re.sub(r'^(.*?)\s*[-–—:]\s*\1\s*[-–—:]\s*', r'\1 - ', q, flags=re.IGNORECASE).strip()
 
             if shazam_secret and req_token != shazam_secret:
                 logger.warning(f"Unauthorized POST /shazam attempt from {self.client_address[0]}")
@@ -1613,7 +1661,12 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
 
             if q:
                 current_chat_id = env_vars.get("TELEGRAM_CHAT_ID") or env_vars.get("TELEGRAM_OWNER_ID")
-                threading.Thread(target=search_and_prepare_music, args=(q, current_chat_id), daemon=True).start()
+                threading.Thread(
+                    target=search_and_prepare_music,
+                    args=(q, current_chat_id),
+                    kwargs={"hint_artist": artist if artist else None, "hint_title": title if title else None},
+                    daemon=True
+                ).start()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.end_headers()
