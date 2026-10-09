@@ -946,17 +946,16 @@ def handle_telegram_callback(cb: dict, tg_token: str, env_vars: dict):
         shutil.rmtree(track_dir, ignore_errors=True)
 
         name_str = f"{artist} — {title}" if artist else title
+        # Delete audio preview message from Telegram chat so the MP3 is truly deleted from PM
         requests.post(
-            f"https://api.telegram.org/bot{tg_token}/editMessageCaption",
+            f"https://api.telegram.org/bot{tg_token}/deleteMessage",
             json={
                 "chat_id": chat_id,
                 "message_id": msg_id,
-                "caption": f"❌ <b>Отменено:</b> <s>{name_str}</s>",
-                "parse_mode": "HTML",
-                "reply_markup": {"inline_keyboard": []}
             },
-            timeout=10
+            timeout=5
         )
+        send_telegram_alert(tg_token, chat_id, f"❌ <b>Отменено:</b> <s>{name_str}</s>\n<i>Временный MP3 удалён.</i>")
         return
 
     if action == "pub":
@@ -1550,23 +1549,32 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
             env_vars = load_env()
             shazam_secret = env_vars.get("SHAZAM_SECRET_TOKEN", "")
 
+            # 1. Parse URL query parameters (e.g. from iOS Shortcut URL string)
+            url_qs = urllib.parse.parse_qs(parsed.query)
+
             content_len = int(self.headers.get('Content-Length', 0))
-            post_body = self.rfile.read(content_len).decode('utf-8', errors='ignore')
+            post_body = self.rfile.read(content_len).decode('utf-8', errors='ignore') if content_len > 0 else ""
             q = ""
             req_token = (
+                url_qs.get("token", [""])[0] or
+                url_qs.get("key", [""])[0] or
                 self.headers.get("X-Auth-Token", "") or
                 self.headers.get("Authorization", "").replace("Bearer ", "").strip()
             )
-            try:
-                body_json = json.loads(post_body)
-                q = body_json.get("query") or body_json.get("track") or body_json.get("title") or body_json.get("q")
-                if not req_token:
-                    req_token = body_json.get("token") or body_json.get("key")
-            except Exception:
-                qs = urllib.parse.parse_qs(post_body)
-                q = qs.get("q", [""])[0] or qs.get("track", [""])[0] or post_body.strip()
-                if not req_token:
-                    req_token = qs.get("token", [""])[0]
+            if post_body:
+                try:
+                    body_json = json.loads(post_body)
+                    q = body_json.get("query") or body_json.get("track") or body_json.get("title") or body_json.get("q")
+                    if not req_token:
+                        req_token = body_json.get("token") or body_json.get("key")
+                except Exception:
+                    body_qs = urllib.parse.parse_qs(post_body)
+                    q = body_qs.get("q", [""])[0] or body_qs.get("track", [""])[0] or post_body.strip()
+                    if not req_token:
+                        req_token = body_qs.get("token", [""])[0]
+
+            if not q:
+                q = url_qs.get("q", [""])[0] or url_qs.get("track", [""])[0] or url_qs.get("query", [""])[0]
 
             if shazam_secret and req_token != shazam_secret:
                 logger.warning(f"Unauthorized POST /shazam attempt from {self.client_address[0]}")
