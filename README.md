@@ -1,45 +1,80 @@
-# 🚀 Gemini Proxy Checker & e0f Subscription Daemon (VPS Edition)
+# 🛡️ Gemini Proxy Checker & Shadowrocket Config Generator
 
-Комплексный автономный бэкенд для проверки прокси-узлов на доступность Google Gemini (Web + API), управления мультипрофильными подписками Shadowrocket (AmneziaWG, Hysteria2, VLESS, Mieru, TrustTunnel), веб-мониторинга и автоматической выгрузки музыки через Shazam Webhook в Telegram-канал.
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Xray-core](https://img.shields.io/badge/core-Xray-purple.svg)](https://github.com/XTLS/Xray-core)
+[![sing-box](https://img.shields.io/badge/core-sing--box-orange.svg)](https://github.com/SagerNet/sing-box)
+[![Shadowrocket](https://img.shields.io/badge/client-Shadowrocket-blue.svg)](https://apps.apple.com/app/shadowrocket/id932747118)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
+Автоматизированный комплекс для глубокого тестирования доступности **Google Gemini** (Web-интерфейс и официальный Gemini API) через цепочки современных прокси-протоколов (**VLESS Reality/XTLS**, **VMess**, **Trojan**, **Shadowsocks**, **Hysteria 2**).
+
+Сервис динамически генерирует оптимизированный конфигурационный файл для **Shadowrocket** (`shadowrocket.conf`), автоматически публикует его в GitHub-репозиторий при изменении рабочих узлов, управляет AmneziaWG (AWG) подписками от **e0f.cx** и предоставляет веб-панель мониторинга в реальном времени.
 
 ---
 
-## 🌟 Основные возможности
+## ✨ Основные возможности
 
-### 1. 🤖 Умный чекер Google Gemini (Web & API)
-* **Мультипротокольное тестирование:** Ephemeral-инстансы **Xray-core** (VLESS, Trojan, Shadowsocks) и **sing-box** (Hysteria 2).
-* **Dual-Verification:**
-  * **Gemini Web:** Проверка на `gemini.google.com` с инспекцией WIZ-токенов гео-блокировки (`RU`, `BY`, заглушка недоступности сервиса в регионе).
-  * **Gemini API:** Реальный запрос `generateContent` к модели Gemini API с проверкой генерации текста.
-* **Автоматическая сборка `shadowrocket.conf`:**
-  * Группа `GEMINI2` — узлы, открывающие веб-интерфейс без заглушек.
-  * Группа `GEMINI` — узлы с рабочим доступом к Gemini API.
-* **Smart Quick-Check:** Легковесный скрипт `quick_check.sh` проверяет только ранее работавшие ноды каждые 10 минут, экономя ресурсы и квоты API. При падении хотя бы одного сервера автоматически запускается полный цикл.
-* **История состояния:** Сохранение истории последних 48 проверок в `checker_state.json`.
+1. **Глубокая двухуровневая проверка Google Gemini**:
+   - **Gemini Web (`gemini.google.com`)**: полноценная валидация ответа с проверкой на региональные заглушки (`check_web_stub.py`), исключающая ложноположительные срабатывания («Gemini isn't supported in your country»).
+   - **Gemini API (`generativelanguage.googleapis.com`)**: отправка реального тестового запроса генерации контента к модели `gemini-2.5-flash` через проверяемый прокси.
+2. **Мультипротокольность**:
+   - Встроенная оркестрация ядрами **Xray-core** (VLESS Reality, VMess, Trojan, Shadowsocks) и **sing-box** (Hysteria 2) с динамическим выделением локальных портов для параллельного тестирования.
+3. **Автоматическая синхронизация с Shadowrocket**:
+   - Формирование единого конфигурационного файла `shadowrocket.conf` с настроенными группами серверов, тестами задержки и правилами маршрутизации (DIRECT, PROXY, REJECT).
+   - Автоматический коммит и `git push` в удалённый репозиторий только при реальном изменении списка рабочих серверов.
+4. **Управление AmneziaWG подписками (`e0f_sub_server.py`)**:
+   - Автоматическая интеграция с API провайдера **e0f.cx**.
+   - Управление профилями пользователей с выделением уникальных AmneziaWG (AWG) конфигураций.
+   - Дисковое кэширование профилей (`profile_cache.json`): сервис мгновенно готов к раздаче подписок даже при перезагрузке сервера или сетевых задержках e0f API.
+   - Эндпоинты `/sub` (общая подписка) и `/awg` (персональные AmneziaWG файлы).
+5. **Умный двухуровневый планировщик (Smart Cron)**:
+   - **Полный цикл** (`run.sh`): каждые 3 часа запускает проверку всех серверов подписки.
+   - **Быстрый мониторинг** (`quick_check.sh`): каждые 10 минут проверяет исключительно текущие активные серверы. Если хотя бы один узел отвалился — мгновенно инициируется полный цикл проверки и отправляется алерт в Telegram.
+6. **Веб-панель мониторинга (`/status`)**:
+   - Стильный минималистичный дашборд в тёмной теме:
+     - Цветовые индикаторы статуса (Web / API) для каждого прокси-узла.
+     - Таймер обратного отсчёта до следующего запланированного запуска проверки.
+     - Сводка по серверам в подписках.
+     - История последних 48 проверок с детализацией.
+     - Автообновление каждые 60 секунд.
+7. **Nginx Reverse Proxy & Защита**:
+   - Ограничение частоты запросов (`limit_req`) для защиты подписок от перегрузки.
+   - Security-заголовки (`X-Content-Type-Options`, `X-Frame-Options`).
+   - Эндпоинт проверки здоровья `/health`.
 
-### 2. 📦 Демон подписок e0f.cx & AmneziaWG
-* **Мультипрофильность:** Создание независимых изолированных профилей (например, `Xan`, `iya`) через Telegram-бота.
-* **AmneziaWG (AWG 2.0 & 3.1):** Автоматическая генерация и ротация пиров в API e0f, распределение конфигов без превышения лимита слотов.
-* **Дополнительные протоколы:** Включение общих узлов TrustTunnel, Mieru и Hysteria2 в единую подписку.
-* **Автономный дисковый кэш:** При любых сбоях API e0f или истечении токена сервис мгновенно загружает локальный кэш с диска — подписки клиентов никогда не сбрасываются в ноль.
+---
 
-### 3. 🎵 Shazam & Music Pipeline (Автоматизация выгрузки в канал)
-* **Apple Shortcuts Webhook (`/shazam`, `/music`):** При распознавании трека на iPhone шорткат делает мгновенный запрос на сервер и сразу завершает работу, не зависая в ожидании.
-* **Поддержка GET и POST:** Приём параметров через строку URL (`?token=...&q=...` или `&artist=...&title=...`), JSON-тело или заголовки.
-* **Защита токеном:** Доступ к вебхуку закрыт секретным токеном `SHAZAM_SECRET_TOKEN`.
-* **Умный поиск и авто-дедупликация:**
-  * Поиск лучшей аудиодорожки через `yt-dlp` и конвертация в 320 kbps MP3 со встраиванием обложки.
-  * Автоматическое удаление дублирования исполнителя в названии (`Moby — Moby - Natural Blues` ➔ `Moby — Natural Blues`) и очистка названий от мусора клипов (`Official Video`, `Lyric Video` и т.д.).
-* **Интерактивное подтверждение в Telegram:**
-  * Скачанный трек с плеером отправляется в личные сообщения владельцу с кнопками `[✅ Закинуть в канал]` и `[❌ Отмена]`.
-  * При подтверждении аудиофайл с чистыми тегами публикуется в целевой Telegram-канал («Свалка треков»).
-  * При отмене или публикации временный MP3 удаляется с сервера, а аудиосообщение аккуратно удаляется из лички, не засоряя чат.
-* **Прямой поиск в боте:** Отправка названия трека текстом в диалог с ботом или команда `/music <название>`.
+## 🏗 Архитектура
 
-### 4. 🌐 Nginx Reverse Proxy & Веб-страница статуса
-* Публичный веб-мониторинг на `/status` (темная минималистичная тема, отображение зеленых/красных индикаторов Gemini-узлов, счетчики подписок, история проверок, мета-автообновление каждые 60 секунд).
-* Защита эндпоинтов подписок `/sub` и `/awg` через Nginx rate-limiting (`limit_req`).
-* Эндпоинт проверки здоровья `/health`.
+```mermaid
+flowchart TD
+    CronFull[Cron: Полная проверка каждые 3ч] --> Run[run.sh]
+    CronQuick[Cron: Быстрая проверка каждые 10мин] --> Quick[quick_check.sh]
+    Quick -->|Нода упала| Run
+    
+    Run --> Checker[checker.py]
+    Checker -->|VLESS / Trojan / SS| Xray[(Xray-core)]
+    Checker -->|Hysteria 2| SingBox[(sing-box)]
+    
+    Xray --> TestWeb{Тест Gemini Web\ncheck_web_stub.py}
+    SingBox --> TestWeb
+    Xray --> TestAPI{Тест Gemini API\ngenerateContent}
+    SingBox --> TestAPI
+    
+    TestWeb & TestAPI --> State[(checker_state.json)]
+    State --> GenConf[Генерация shadowrocket.conf]
+    GenConf --> GitPush[Git Push в GitHub репозиторий]
+    
+    subgraph Daemon["e0f_sub_server.py (Порт 8088 / Nginx 8081)"]
+        SubAPI[/sub - Общая подписка]
+        AWGAPI[/awg - AmneziaWG профили]
+        StatusWeb[/status - HTML дашборд]
+        HealthAPI[/health - Проверка статуса]
+    end
+    
+    Daemon --> TG[Telegram Уведомления]
+    ShadowrocketClient([iOS Shadowrocket]) -->|Скачивание подписки| SubAPI
+```
 
 ---
 
@@ -47,88 +82,65 @@
 
 ```text
 /opt/gemini-proxy-checker/
-├── checker.py             # Основной чекер узлов (Xray + sing-box) для Gemini Web и API
-├── check_web_stub.py      # Изолированный скрипт детекции региональных заглушек Google
-├── e0f_sub_server.py      # Автономный сервер подписок, Telegram-бот и Shazam-вебхук
-├── quick_check.sh         # Быстрая проверка активных узлов (Smart Cron)
-├── run.sh                 # Оркестратор полного цикла проверки и Git-синхронизации
+├── checker.py             # Основной движок проверки узлов (Xray + sing-box) для Gemini
+├── check_web_stub.py      # Модуль детекции региональных заглушек Google
+├── e0f_sub_server.py      # Сервер подписок e0f.cx, AWG генератор и веб-дашборд
+├── quick_check.sh         # Скрипт быстрого мониторинга активных серверов
+├── run.sh                 # Оркестратор полного цикла и git-синхронизации
 ├── shadowrocket.conf      # Сгенерированный актуальный конфиг для Shadowrocket
-├── .env.example           # Пример конфигурационного файла с переменными окружения
+├── .env.example           # Пример конфигурационного файла
 ├── .gitignore             # Исключение секретов, локальных кэшей и временных файлов
 └── README.md              # Документация проекта
 ```
 
 ---
 
-## ⚙️ Установка и развёртывание на VPS
+## 🚀 Установка и развёртывание на VPS
 
 ### 1. Системные зависимости
 ```bash
-apt-get update && apt-get install -y nginx ffmpeg python3 python3-venv git curl
+sudo apt-get update && sudo apt-get install -y nginx python3 python3-venv git curl
 ```
 
-### 2. Установка Xray-core и sing-box
+### 2. Установка ядер Xray-core и sing-box
 ```bash
-# Xray-core
+# Установка Xray-core
 bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)"
 
-# sing-box (для Hysteria 2)
+# Установка sing-box (для поддержки Hysteria 2)
 bash -c "$(curl -fsSL https://sing-box.app/deb-install.sh)"
 ```
 
-### 3. Клонирование репозитория и установка Python-окружения
+### 3. Клонирование и настройка виртуального окружения
 ```bash
 git clone git@github.com:teddyxanya/Gemini-Proxy-Checker.git /opt/gemini-proxy-checker
 cd /opt/gemini-proxy-checker
 
 python3 -m venv venv
 source venv/bin/activate
-pip install requests pyyaml python-dotenv yt-dlp
+pip install requests pyyaml python-dotenv
 ```
 
-### 4. Настройка окружения (`.env`)
-Скопируйте пример конфига и заполните свои значения:
+### 4. Настройка конфигурации (`.env`)
+Скопируйте пример файла конфигурации:
 ```bash
 cp .env.example .env
 nano .env
 ```
 
-Пример `.env`:
-```ini
-# Ссылка на базовую подписку прокси (VLESS, Trojan, SS)
-SUB_URL="https://your-provider.com/sub/YOUR_KEY"
-
-# Ключ Google Gemini API
-GEMINI_API_KEY="AIzaSy..."
-
-# Telegram бот
-TELEGRAM_BOT_TOKEN="1234567890:ABCdef..."
-TELEGRAM_CHAT_ID="12345678"
-TELEGRAM_OWNER_ID="12345678"
-
-# Музыкальный канал для публикаций
-MUSIC_CHANNEL_ID="-1001234567890"
-
-# Токен для интеграции Shazam / Apple Shortcuts
-SHAZAM_SECRET_TOKEN="your_random_secret_token"
-
-# Токен провайдера e0f.cx
-EOF_TOKEN="eyJhbGciOi..."
-SECRET_TOKEN="your_default_secret_sub_token"
-VPS_IP="127.0.0.1"
-PORT=8088
-
-# Git авто-пуш
-GIT_REPO_URL="git@github.com:teddyxanya/Gemini-Proxy-Checker.git"
-GIT_BRANCH="main"
-CONF_PATH="/opt/gemini-proxy-checker/shadowrocket.conf"
-```
+Заполните ваши параметры:
+* `SUB_URL`: ссылка на исходную подписку провайдера (VLESS, VMess, Trojan, SS, Hysteria2).
+* `GEMINI_API_KEY`: API-ключ Google AI Studio.
+* `EOF_TOKEN`: Bearer токен авторизации в e0f.cx.
+* `SECRET_TOKEN`: секретный ключ по умолчанию для получения подписки.
+* `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `TELEGRAM_OWNER_ID`: данные вашего бота для алертов.
+* `GIT_REPO_URL`: ссылка на ваш GitHub-репозиторий для авто-пуша `shadowrocket.conf`.
 
 ---
 
-## 🛠 Настройка Nginx и Systemd
+## ⚙️ Настройка Systemd и Nginx
 
-### 1. Nginx конфиг (`/etc/nginx/sites-available/gemini-checker`)
+### 1. Nginx Reverse Proxy (`/etc/nginx/sites-available/gemini-checker`)
 ```nginx
 limit_req_zone $binary_remote_addr zone=sub:10m rate=10r/m;
 
@@ -139,18 +151,23 @@ server {
     add_header X-Content-Type-Options nosniff;
     add_header X-Frame-Options DENY;
 
+    # Веб-страница статуса
     location = /status {
         proxy_pass http://127.0.0.1:8088/status;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
     }
 
+    # Health check
     location = /health {
         proxy_pass http://127.0.0.1:8088/health;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
     }
 
+    # Эндпоинты подписок с ограничением частоты
     location ~ ^/(sub|awg)$ {
         limit_req zone=sub burst=5 nodelay;
         proxy_pass http://127.0.0.1:8088;
@@ -167,16 +184,16 @@ server {
     }
 }
 ```
-Активируйте сайт и перезапустите Nginx:
+
+Активируйте конфигурацию и перезапустите Nginx:
 ```bash
-ln -s /etc/nginx/sites-available/gemini-checker /etc/nginx/sites-enabled/
-nginx -t && systemctl restart nginx
+sudo nginx -t && sudo systemctl reload nginx
 ```
 
-### 2. Systemd служба (`/etc/systemd/system/e0f-sub.service`)
+### 2. Сервис сервера подписок (`/etc/systemd/system/e0f-sub.service`)
 ```ini
 [Unit]
-Description=e0f.cx Private AWG Subscription & Music Daemon
+Description=e0f.cx Private AWG Subscription Daemon
 After=network.target
 
 [Service]
@@ -191,55 +208,29 @@ RestartSec=5
 WantedBy=multi-user.target
 ```
 
-Запуск службы:
+Запустите сервис:
 ```bash
-systemctl daemon-reload
-systemctl enable --now e0f-sub
+sudo systemctl daemon-reload
+sudo systemctl enable --now e0f-sub
 ```
 
 ### 3. Расписание Cron (`crontab -e`)
 ```cron
-# Полный прогон чекера каждые 3 часа
+# Полная проверка всех узлов каждые 3 часа
 0 */3 * * * /opt/gemini-proxy-checker/run.sh >> /var/log/gemini-proxy-checker.log 2>&1
 
-# Быстрая проверка только рабочих Gemini узлов каждые 10 минут
+# Быстрый мониторинг активных серверов каждые 10 минут
 */10 * * * * /opt/gemini-proxy-checker/quick_check.sh >> /var/log/gemini-quick-check.log 2>&1
 ```
 
 ---
 
-## 📱 Настройка Apple Shortcuts (Шорткат на iPhone)
+## 🔗 Связанные проекты
 
-Сборка шортката в приложении **«Команды»** на iOS:
-
-1. **Действие 1:** `Распознать музыку с помощью Shazam`.
-2. **Действие 2:** `Текст`:
-   ```text
-   http://YOUR_VPS_IP:8081/shazam?token=YOUR_SHAZAM_SECRET_TOKEN&artist=[Исполнитель]&title=[Название]
-   ```
-   *(Вставляя синюю плашку `Медиафайлы Shazam`, нажмите на неё пальцем и выберите для первой переменной «Исполнитель», а для второй — «Название»).*
-3. **Действие 3:** `Получить содержимое URL` (передать блок `Текст`, метод по умолчанию: `GET`).
-4. **Действие 4:** `Показать уведомление`: `Трек отправлен в бота! 🎧`.
+* 🎵 **[music-tg-bot](https://github.com/teddyxanya/music-tg-bot)** — Автономный Telegram-бот для поиска, скачивания музыки в 320 kbps (с обходом 403 и возрастных ограничений YouTube, SoundCloud фоллбэком) и интеграцией с Shazam через Apple Быстрые команды.
 
 ---
 
-## 🤖 Команды Telegram-бота
+## 📄 Лицензия
 
-| Команда | Описание |
-| :--- | :--- |
-| `/status` | Статус рабочих серверов Gemini, время следующей проверки и профили подписок |
-| `/profiles` | Список профилей и персональные ссылки для добавления в Shadowrocket |
-| `/newprofile <имя>` | Создать новый изолированный профиль с AmneziaWG пирами |
-| `/delprofile <имя>` | Удалить профиль и освободить слоты на e0f |
-| `/check` | Принудительный запуск полной проверки серверов (только для владельца) |
-| `/sync` | Принудительная синхронизация подписок и пиров с e0f API |
-| `/music <название>` | Поиск и скачивание трека с предпросмотром и кнопками подтверждения |
-
----
-
-## 🔒 Безопасность
-* Все приватные токены, ключи и Telegram ID хранятся исключительно в нетрекаемом файле `.env`.
-* История Git очищена от чувствительных данных.
-* Shazam-вебхук защищён проверкой секретного токена.
-* Публикация музыки в канал защищена двухэтапным подтверждением владельцем.
-* Эндпоинты подписок защищены ограничением частоты запросов (rate limiting).
+MIT License © 2026 teddyxanya
