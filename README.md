@@ -48,32 +48,32 @@
 
 ```mermaid
 flowchart TD
-    CronFull[Cron: Полная проверка каждые 3ч] --> Run[run.sh]
-    CronQuick[Cron: Быстрая проверка каждые 10мин] --> Quick[quick_check.sh]
+    CronFull["Cron: Полная проверка каждые 3ч"] --> Run["run.sh"]
+    CronQuick["Cron: Быстрая проверка каждые 10мин"] --> Quick["quick_check.sh"]
     Quick -->|Нода упала| Run
     
-    Run --> Checker[checker.py]
-    Checker -->|VLESS / Trojan / SS| Xray[(Xray-core)]
-    Checker -->|Hysteria 2| SingBox[(sing-box)]
+    Run --> Checker["checker.py"]
+    Checker -->|VLESS / Trojan / SS| Xray[("Xray-core")]
+    Checker -->|Hysteria 2| SingBox[("sing-box")]
     
-    Xray --> TestWeb{Тест Gemini Web\ncheck_web_stub.py}
+    Xray --> TestWeb{"Тест Gemini Web (check_web_stub.py)"}
     SingBox --> TestWeb
-    Xray --> TestAPI{Тест Gemini API\ngenerateContent}
+    Xray --> TestAPI{"Тест Gemini API (generateContent)"}
     SingBox --> TestAPI
     
-    TestWeb & TestAPI --> State[(checker_state.json)]
-    State --> GenConf[Генерация shadowrocket.conf]
-    GenConf --> GitPush[Git Push в GitHub репозиторий]
+    TestWeb & TestAPI --> State[("checker_state.json")]
+    State --> GenConf["Генерация shadowrocket.conf"]
+    GenConf --> GitPush["Git Push в GitHub репозиторий"]
     
     subgraph Daemon["e0f_sub_server.py (Порт 8088 / Nginx 8081)"]
-        SubAPI[/sub - Общая подписка]
-        AWGAPI[/awg - AmneziaWG профили]
-        StatusWeb[/status - HTML дашборд]
-        HealthAPI[/health - Проверка статуса]
+        SubAPI["/sub — Общая подписка"]
+        AWGAPI["/awg — AmneziaWG профили"]
+        StatusWeb["/status — HTML дашборд"]
+        HealthAPI["/health — Проверка статуса"]
     end
     
-    Daemon --> TG[Telegram Уведомления]
-    ShadowrocketClient([iOS Shadowrocket]) -->|Скачивание подписки| SubAPI
+    Daemon --> TG["Telegram Уведомления"]
+    ShadowrocketClient(["iOS Shadowrocket"]) -->|Скачивание подписки| SubAPI
 ```
 
 ---
