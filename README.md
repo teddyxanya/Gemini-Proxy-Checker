@@ -41,6 +41,26 @@
    - Ограничение частоты запросов (`limit_req`) для защиты подписок от перегрузки.
    - Security-заголовки (`X-Content-Type-Options`, `X-Frame-Options`).
    - Эндпоинт проверки здоровья `/health`.
+8. **🌐 Единый шлюз Telegram-команд (Unified Router API)**:
+   - Локальный эндпоинт `POST /api/tg_command` для бесшовной интеграции с [music-tg-bot](https://github.com/teddyxanya/music-tg-bot).
+   - Позволяет управлять подписками, создавать профили (`/newprofile`), удалять профили (`/delprofile`), принудительно синхронизировать ноды (`/sync`) и запускать проверку (`/check`) через единого бота без конфликтов `409 Conflict`.
+   - Поддержка объединённого отчёта `/status` (статус нод Gemini + кэш и воркеры музыки).
+
+---
+
+## 🕹 Команды Telegram-бота
+
+Управление осуществляется через единого бота (маршрутизируется через [music-tg-bot](https://github.com/teddyxanya/music-tg-bot)):
+
+| Команда | Описание | Ограничение |
+| :--- | :--- | :--- |
+| `/status` | Единый статус: проверенные серверы Gemini, таймер cron, подписки + кэш музыки | Доступно всем |
+| `/profiles` (`/list`) | Список всех активных профилей и ссылок для Shadowrocket | Доступно всем |
+| `/newprofile <имя>` | Создать персональный профиль подписки с выделением слотов на e0f.cx | Доступно всем |
+| `/delprofile <имя>` | Удалить профиль и освободить слоты на e0f.cx | Доступно всем |
+| `/sync` | Принудительная синхронизация нод и протоколов с e0f API | Доступно всем |
+| `/check` | Запуск полного цикла проверки прокси (Web + API) через `run.sh` | Только владелец бота |
+| `/help` | Полная справка по командам прокси и музыки | Доступно всем |
 
 ---
 
@@ -70,9 +90,15 @@ flowchart TD
         AWGAPI["/awg — AmneziaWG профили"]
         StatusWeb["/status — HTML дашборд"]
         HealthAPI["/health — Проверка статуса"]
+        TGCommand["POST /api/tg_command — Шлюз команд"]
     end
     
-    Daemon --> TG["Telegram Уведомления"]
+    subgraph MusicBot["music-tg-bot (Порт 8082)"]
+        TGBot["Telegram Bot (getUpdates)"]
+    end
+    
+    TGBot -->|"Маршрутизация /profiles, /sync, /check, /status"| TGCommand
+    Daemon --> TGNotify["Telegram Уведомления"]
     ShadowrocketClient(["iOS Shadowrocket"]) -->|Скачивание подписки| SubAPI
 ```
 
