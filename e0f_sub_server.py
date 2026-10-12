@@ -729,11 +729,162 @@ def delete_profile_via_telegram(name: str) -> dict:
 # Telegram Bot Worker (Long-polling + Profile Commands)
 # =====================================================================
 
+def execute_proxy_command(cmd: str, args: list, sender_user_id: str = "", chat_id: str = "") -> dict:
+    """Executes a proxy checker or subscription command and returns a result dict."""
+    cmd = cmd.lower()
+    env_vars = load_env()
+    owner_user_id = env_vars.get("TELEGRAM_OWNER_ID", "")
+    if not owner_user_id and sender_user_id:
+        save_env_var("TELEGRAM_OWNER_ID", sender_user_id)
+        owner_user_id = sender_user_id
+        logger.info(f"Auto-bound Telegram Owner user_id: {sender_user_id}")
+
+    # 1. /start, /help
+    if cmd in ("/start", "/help"):
+        help_msg = (
+            "🤖 <b>e0f Protocol Subscription Manager</b>\n\n"
+            "<b>Управление профилями:</b>\n"
+            "➕ <code>/newprofile &lt;имя&gt;</code> — Создать новый профиль (выделит свои AWG серверы и выдаст ссылку)\n"
+            "➖ <code>/delprofile &lt;имя&gt;</code> — Удалить профиль и освободить слоты на e0f\n"
+            "📋 <code>/profiles</code> — Список всех профилей и ссылки подписок\n\n"
+            "<b>Серверы и синхронизация:</b>\n"
+            "📊 <code>/status</code> — Статус серверов и слотов\n"
+            "🔄 <code>/sync</code> — Принудительно обновить серверы\n"
+            "🔎 <code>/check</code> — Тест Gemini серверов"
+        )
+        return {"handled": True, "text": help_msg}
+
+    # 2. /newprofile or /add or /create
+    if cmd in ("/newprofile", "/add", "/create"):
+        if not args:
+            return {"handled": True, "text": "⚠️ Укажите имя профиля, например:\n<code>/newprofile Work</code>"}
+        p_name = args[0]
+        res = add_new_profile_via_telegram(p_name)
+        if "error" in res:
+            return {"handled": True, "text": f"❌ Ошибка: {res['error']}"}
+        sub_url = f"{get_vps_base_url()}/sub?token={res['sub_token']}"
+        lines = [
+            f"✅ <b>Профиль «{res['name']}» успешно создан!</b>\n",
+            "🔗 <b>Ссылка подписки для Shadowrocket:</b>",
+            f"<code>{sub_url}</code>\n",
+            f"⚡ <b>AmneziaWG:</b> {res['awg_count']} серверов (с тегом [{res['name']}])",
+            f"🛡 <b>Доп. протоколы:</b> {res['total_nodes'] - res['awg_count']} (Mieru, TrustTunnel, Hysteria2)",
+            f"Всего в подписке: <b>{res['total_nodes']} узлов</b>"
+        ]
+        if res.get("warnings"):
+            lines.append("\n⚠️ <b>Предупреждения по слотам:</b>")
+            for w in res["warnings"]:
+                lines.append(f"  • {w}")
+        return {"handled": True, "text": "\n".join(lines)}
+
+    # 3. /delprofile or /delete or /del
+    if cmd in ("/delprofile", "/delete", "/del"):
+        if not args:
+            return {"handled": True, "text": "⚠️ Укажите имя профиля для удаления, например:\n<code>/delprofile Work</code>"}
+        p_name = args[0]
+        res = delete_profile_via_telegram(p_name)
+        if "error" in res:
+            return {"handled": True, "text": f"❌ Ошибка: {res['error']}"}
+        return {
+            "handled": True,
+            "text": (
+                f"🗑 <b>Профиль «{res['name']}» удалён!</b>\n"
+                f"Освобождено слотов на e0f.cx: <b>{res['freed_slots']}</b>."
+            )
+        }
+
+    # 4. /profiles or /list
+    if cmd in ("/profiles", "/list"):
+        profiles = load_profiles()
+        lines = ["📋 <b>Активные профили подписок:</b>\n"]
+        for k, p in profiles.items():
+            p_name = p["name"]
+            sub_url = f"{get_vps_base_url()}/sub?token={p['sub_token']}"
+            info = profile_cache.get(p["sub_token"], {})
+            total = info.get("total_count", 0)
+            awg = info.get("awg_count", 0)
+            lines.append(f"👤 <b>Профиль: {p_name}</b> ({total} узлов, AWG: {awg})")
+            lines.append(f"🔗 <code>{sub_url}</code>\n")
+        return {"handled": True, "text": "\n".join(lines)}
+
+    # 5. /status
+    if cmd == "/status":
+        lines = ["📊 <b>Статус Gemini Checker</b>\n"]
+        checker_state = {}
+        if CHECKER_STATE_FILE.exists():
+            try:
+                with open(CHECKER_STATE_FILE, "r", encoding="utf-8") as csf:
+                    checker_state = json.load(csf)
+            except Exception:
+                pass
+        gemini_nodes = checker_state.get("web", [])
+        last_check_str = checker_state.get("last_check", "")
+        if gemini_nodes:
+            lines.append(f"✅ <b>Рабочие серверы (Web+API): {len(gemini_nodes)}</b>")
+            for node in gemini_nodes[:10]:
+                lines.append(f"  • {node}")
+            if len(gemini_nodes) > 10:
+                lines.append(f"  ... и ещё {len(gemini_nodes) - 10}")
+        else:
+            lines.append("❌ <b>Нет рабочих Gemini серверов</b>")
+        if last_check_str:
+            lines.append(f"\n⏱ Последняя проверка: {last_check_str}")
+        import datetime as _dt
+        now_utc = _dt.datetime.utcnow()
+        hour = now_utc.hour
+        next_h = ((hour // 3) + 1) * 3
+        if next_h >= 24:
+            next_check = now_utc.replace(hour=0, minute=0, second=0, microsecond=0) + _dt.timedelta(days=1)
+        else:
+            next_check = now_utc.replace(hour=next_h, minute=0, second=0, microsecond=0)
+        delta = next_check - now_utc
+        mins_left = int(delta.total_seconds() // 60)
+        h_left, m_left = divmod(mins_left, 60)
+        eta_str = f"{h_left}ч {m_left}мин" if h_left > 0 else f"{m_left}мин"
+        lines.append(f"🕐 Следующая проверка: через {eta_str}")
+
+        if not profile_cache:
+            load_profile_cache_from_disk()
+        profiles = load_profiles()
+        lines.append("\n📦 <b>Подписки:</b>")
+        for k, p in profiles.items():
+            p_name = p["name"]
+            info = profile_cache.get(p["sub_token"], {})
+            total = info.get("total_count", 0)
+            awg = info.get("awg_count", 0)
+            lines.append(f"  👤 {p_name}: {total} серверов (AWG: {awg})")
+        if last_sync_time:
+            lines.append(f"\n⏱ Последняя синхронизация e0f: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(last_sync_time))}")
+        return {"handled": True, "text": "\n".join(lines)}
+
+    # 6. /check
+    if cmd == "/check":
+        if owner_user_id and sender_user_id and sender_user_id != owner_user_id:
+            return {"handled": True, "text": "⛔ Команда /check доступна только владельцу бота."}
+        import subprocess
+        run_script = BASE_DIR / "run.sh"
+        if run_script.exists():
+            subprocess.Popen(["bash", str(run_script)], cwd=str(BASE_DIR))
+            return {
+                "handled": True,
+                "text": "⏳ Запущена полная проверка прокси-серверов (Web + API).\nЭто займёт около 15-20 минут. Отчёт придёт автоматически по завершении!"
+            }
+        else:
+            return {"handled": True, "text": "⚠️ Скрипт run.sh не найден на сервере."}
+
+    # 7. /sync
+    if cmd == "/sync":
+        res = do_sync()
+        summary = ", ".join([f"{p['name']}: {p['nodes']}" for p in res.get('profiles', [])])
+        return {"handled": True, "text": f"✅ Синхронизация завершена!\n{summary}"}
+
+    return {"handled": False, "error": f"Unknown command: {cmd}"}
+
+
 def telegram_bot_worker():
     logger.info("Telegram Bot worker started.")
     offset = 0
 
-    # Ensure webhook is cleared so getUpdates works
     try:
         env_vars = load_env()
         tg_tok = env_vars.get("TELEGRAM_BOT_TOKEN")
@@ -768,11 +919,6 @@ def telegram_bot_worker():
                 for update in data.get("result", []):
                     offset = update["update_id"] + 1
 
-                    cb = update.get("callback_query")
-                    if cb:
-                        handle_telegram_callback(cb, tg_token, env_vars)
-                        continue
-
                     msg = update.get("message")
                     if not msg:
                         continue
@@ -780,169 +926,21 @@ def telegram_bot_worker():
                     chat_id = str(msg["chat"]["id"])
                     raw_text = msg.get("text", "").strip()
 
-                    # Auto-bind chat ID and owner user_id (first ever sender becomes owner)
+                    # Auto-bind chat ID and owner user_id
                     sender_user_id = str(msg.get("from", {}).get("id", ""))
-                    owner_user_id = env_vars.get("TELEGRAM_OWNER_ID", "")
                     if not chat_id.startswith("-"):
                         if not current_chat_id or current_chat_id != chat_id:
                             save_env_var("TELEGRAM_CHAT_ID", chat_id)
                             current_chat_id = chat_id
                             logger.info(f"Auto-bound Telegram Chat ID: {chat_id}")
-                    if not owner_user_id and sender_user_id:
-                        save_env_var("TELEGRAM_OWNER_ID", sender_user_id)
-                        owner_user_id = sender_user_id
-                        logger.info(f"Auto-bound Telegram Owner user_id: {sender_user_id}")
 
-                    # Commands handling
                     parts = raw_text.split()
                     cmd = parts[0].lower() if parts else ""
                     args = parts[1:] if len(parts) > 1 else []
 
-                    # 1. /start, /help
-                    if cmd in ("/start", "/help"):
-                        help_msg = (
-                            "🤖 <b>e0f Protocol Subscription Manager</b>\n\n"
-                            "<b>Управление профилями:</b>\n"
-                            "➕ <code>/newprofile &lt;имя&gt;</code> — Создать новый профиль (выделит свои AWG серверы и выдаст ссылку)\n"
-                            "➖ <code>/delprofile &lt;имя&gt;</code> — Удалить профиль и освободить слоты на e0f\n"
-                            "📋 <code>/profiles</code> — Список всех профилей и ссылки подписок\n\n"
-                            "<b>Серверы и синхронизация:</b>\n"
-                            "📊 <code>/status</code> — Статус серверов и слотов\n"
-                            "🔄 <code>/sync</code> — Принудительно обновить серверы\n"
-                            "🔎 <code>/check</code> — Тест Gemini серверов\n\n"
-                            "🎵 <b>Поиск музыки:</b>\n"
-                            "Отправьте боту любое название трека (или <code>/music &lt;название&gt;</code>) — он найдёт его, скачает в MP3 (320 kbps) и отправит в группу «Свалка треков»!"
-                        )
-                        send_telegram_alert(tg_token, chat_id, help_msg)
-
-                    # 2. /newprofile or /add
-                    elif cmd in ("/newprofile", "/add", "/create"):
-                        if not args:
-                            send_telegram_alert(tg_token, chat_id, "⚠️ Укажите имя профиля, например:\n<code>/newprofile Work</code>")
-                        else:
-                            p_name = args[0]
-                            send_telegram_alert(tg_token, chat_id, f"⏳ Создаю профиль <b>«{p_name}»</b> и выделяю AWG-серверы...")
-                            res = add_new_profile_via_telegram(p_name)
-                            if "error" in res:
-                                send_telegram_alert(tg_token, chat_id, f"❌ Ошибка: {res['error']}")
-                            else:
-                                sub_url = f"{get_vps_base_url()}/sub?token={res['sub_token']}"
-                                lines = [
-                                    f"✅ <b>Профиль «{res['name']}» успешно создан!</b>\n",
-                                    "🔗 <b>Ссылка подписки для Shadowrocket:</b>",
-                                    f"<code>{sub_url}</code>\n",
-                                    f"⚡ <b>AmneziaWG:</b> {res['awg_count']} серверов (с тегом [{res['name']}])",
-                                    f"🛡 <b>Доп. протоколы:</b> {res['total_nodes'] - res['awg_count']} (Mieru, TrustTunnel, Hysteria2)",
-                                    f"Всего в подписке: <b>{res['total_nodes']} узлов</b>"
-                                ]
-                                if res.get("warnings"):
-                                    lines.append("\n⚠️ <b>Предупреждения по слотам:</b>")
-                                    for w in res["warnings"]:
-                                        lines.append(f"  • {w}")
-                                send_telegram_alert(tg_token, chat_id, "\n".join(lines))
-
-                    # 3. /delprofile or /delete
-                    elif cmd in ("/delprofile", "/delete", "/del"):
-                        if not args:
-                            send_telegram_alert(tg_token, chat_id, "⚠️ Укажите имя профиля для удаления, например:\n<code>/delprofile Work</code>")
-                        else:
-                            p_name = args[0]
-                            res = delete_profile_via_telegram(p_name)
-                            if "error" in res:
-                                send_telegram_alert(tg_token, chat_id, f"❌ Ошибка: {res['error']}")
-                            else:
-                                send_telegram_alert(
-                                    tg_token, chat_id,
-                                    f"🗑 <b>Профиль «{res['name']}» удалён!</b>\n"
-                                    f"Освобождено слотов на e0f.cx: <b>{res['freed_slots']}</b>."
-                                )
-
-                    # 4. /profiles or /list
-                    elif cmd in ("/profiles", "/list"):
-                        profiles = load_profiles()
-                        lines = ["📋 <b>Активные профили подписок:</b>\n"]
-                        for k, p in profiles.items():
-                            p_name = p["name"]
-                            sub_url = f"{get_vps_base_url()}/sub?token={p['sub_token']}"
-                            info = profile_cache.get(p["sub_token"], {})
-                            total = info.get("total_count", 0)
-                            awg = info.get("awg_count", 0)
-                            lines.append(f"👤 <b>Профиль: {p_name}</b> ({total} узлов, AWG: {awg})")
-                            lines.append(f"🔗 <code>{sub_url}</code>\n")
-                        send_telegram_alert(tg_token, chat_id, "\n".join(lines))
-
-                    # 5. /status
-                    elif cmd == "/status":
-                        lines = ["📊 <b>Статус Gemini Checker</b>\n"]
-                        # Gemini checker state
-                        checker_state = {}
-                        if CHECKER_STATE_FILE.exists():
-                            try:
-                                with open(CHECKER_STATE_FILE, "r") as csf:
-                                    checker_state = json.load(csf)
-                            except Exception:
-                                pass
-                        gemini_nodes = checker_state.get("web", [])
-                        last_check_str = checker_state.get("last_check", "")
-                        if gemini_nodes:
-                            lines.append(f"✅ <b>Рабочие серверы (Web+API): {len(gemini_nodes)}</b>")
-                            for node in gemini_nodes[:10]:
-                                lines.append(f"  • {node}")
-                            if len(gemini_nodes) > 10:
-                                lines.append(f"  ... и ещё {len(gemini_nodes) - 10}")
-                        else:
-                            lines.append("❌ <b>Нет рабочих Gemini серверов</b>")
-                        if last_check_str:
-                            lines.append(f"\n⏱ Последняя проверка: {last_check_str}")
-                        # Calculate next cron run (every 3 hours from midnight UTC)
-                        import datetime as _dt
-                        now_utc = _dt.datetime.utcnow()
-                        hour = now_utc.hour
-                        next_h = ((hour // 3) + 1) * 3
-                        if next_h >= 24:
-                            next_check = now_utc.replace(hour=0, minute=0, second=0, microsecond=0) + _dt.timedelta(days=1)
-                        else:
-                            next_check = now_utc.replace(hour=next_h, minute=0, second=0, microsecond=0)
-                        delta = next_check - now_utc
-                        mins_left = int(delta.total_seconds() // 60)
-                        h_left, m_left = divmod(mins_left, 60)
-                        if h_left > 0:
-                            eta_str = f"{h_left}ч {m_left}мин"
-                        else:
-                            eta_str = f"{m_left}мин"
-                        lines.append(f"🕐 Следующая проверка: через {eta_str}")
-                        # Subscriptions
-                        if not profile_cache:
-                            load_profile_cache_from_disk()
-                        profiles = load_profiles()
-                        lines.append("\n📦 <b>Подписки:</b>")
-                        for k, p in profiles.items():
-                            p_name = p["name"]
-                            info = profile_cache.get(p["sub_token"], {})
-                            total = info.get("total_count", 0)
-                            awg = info.get("awg_count", 0)
-                            lines.append(f"  👤 {p_name}: {total} серверов (AWG: {awg})")
-                        if last_sync_time:
-                            lines.append(f"\n⏱ Последняя синхронизация e0f: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(last_sync_time))}")
-                        send_telegram_alert(tg_token, chat_id, "\n".join(lines))
-
-                    # 6. /sync
-                    elif cmd == "/check":
-                        # Защита: только владелец бота может запускать проверку
-                        if owner_user_id and sender_user_id != owner_user_id:
-                            send_telegram_alert(tg_token, chat_id, "⛔ Команда /check доступна только владельцу бота.")
-                        else:
-                            send_telegram_alert(tg_token, chat_id, "⏳ Запущена полная проверка прокси-серверов (Web + API).\nЭто займёт около 15-20 минут. Отчёт придёт автоматически по завершении!")
-                            import subprocess
-                            subprocess.Popen(["bash", "/opt/gemini-proxy-checker/run.sh"], cwd="/opt/gemini-proxy-checker")
-
-                    # 7. /sync
-                    elif cmd == "/sync":
-                        send_telegram_alert(tg_token, chat_id, "⏳ Синхронизация всех профилей...")
-                        res = do_sync()
-                        summary = ", ".join([f"{p['name']}: {p['nodes']}" for p in res.get('profiles', [])])
-                        send_telegram_alert(tg_token, chat_id, f"✅ Синхронизация завершена!\n{summary}")
-
+                    res = execute_proxy_command(cmd, args, sender_user_id, chat_id)
+                    if res.get("text"):
+                        send_telegram_alert(tg_token, chat_id, res["text"])
 
         except Exception as e:
             logger.debug(f"Telegram polling exception: {e}")
@@ -1162,6 +1160,38 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
 
 
     def do_POST(self):
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == "/api/tg_command":
+            client_ip = self.client_address[0]
+            if client_ip not in ("127.0.0.1", "::1", "localhost"):
+                self.send_response(403)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "Forbidden"}).encode("utf-8"))
+                return
+
+            try:
+                content_length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_length).decode("utf-8")
+                data = json.loads(body)
+                cmd = data.get("cmd", "")
+                args = data.get("args", [])
+                sender_user_id = str(data.get("sender_user_id", ""))
+                chat_id = str(data.get("chat_id", ""))
+
+                result = execute_proxy_command(cmd, args, sender_user_id, chat_id)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(json.dumps(result, ensure_ascii=False).encode("utf-8"))
+            except Exception as e:
+                logger.exception(f"Error handling /api/tg_command: {e}")
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": str(e)}).encode("utf-8"))
+            return
+
         self.send_response(404)
         self.end_headers()
         self.wfile.write(b"Not Found")
