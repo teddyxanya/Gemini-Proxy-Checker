@@ -28,6 +28,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 import shutil
 import requests
+from typing import Optional, List, Dict, Any
 
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
@@ -55,6 +56,7 @@ API_BASE = "https://e0f.cx/api"
 # Cache: { sub_token: { "b64": str, "name": str, "awg_count": int, "total_count": int } }
 profile_cache = {}
 last_sync_time = 0
+last_auth_alert_time = 0
 sync_lock = threading.Lock()
 
 
@@ -127,6 +129,35 @@ def save_env_var(key: str, value: str):
     with open(ENV_FILE, "w", encoding="utf-8") as f:
         f.writelines(lines)
     os.environ[key] = value
+
+
+def auto_login_e0f() -> Optional[str]:
+    """Authenticates with e0f.cx using EOF_EMAIL and EOF_PASSWORD to obtain a fresh JWT token."""
+    env_vars = load_env()
+    email = env_vars.get("EOF_EMAIL")
+    password = env_vars.get("EOF_PASSWORD")
+    if not email or not password:
+        logger.warning("Auto-login skipped: EOF_EMAIL or EOF_PASSWORD not configured.")
+        return None
+
+    try:
+        r = requests.post(
+            f"{API_BASE}/auth/login-password",
+            headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"},
+            json={"email": email, "password": password},
+            timeout=15
+        )
+        if r.status_code in (200, 201):
+            data = r.json()
+            new_token = data.get("accessToken")
+            if new_token:
+                save_env_var("EOF_TOKEN", new_token)
+                logger.info("Successfully re-authenticated with e0f.cx API via password auto-login.")
+                return new_token
+        logger.error(f"Auto-login to e0f.cx failed: HTTP {r.status_code} - {r.text[:200]}")
+    except Exception as e:
+        logger.error(f"Exception during e0f.cx auto-login: {e}")
+    return None
 
 
 def load_profiles() -> dict:
@@ -492,7 +523,11 @@ def do_sync() -> dict:
         tg_chat = env_vars.get("TELEGRAM_CHAT_ID")
 
         if not token:
-            logger.error("EOF_TOKEN not configured!")
+            logger.info("EOF_TOKEN not configured or empty, attempting auto-login...")
+            token = auto_login_e0f()
+
+        if not token:
+            logger.error("EOF_TOKEN not configured and auto-login failed!")
             load_profile_cache_from_disk()
             return {"error": "EOF_TOKEN not configured"}
 
@@ -505,15 +540,41 @@ def do_sync() -> dict:
         # 1. Fetch servers and user configs
         try:
             r_srv = requests.get(f"{API_BASE}/wireguard/servers", headers=headers, timeout=15)
+            if r_srv.status_code == 401:
+                logger.info("e0f.cx returned 401 on servers, attempting auto-login refresh...")
+                new_token = auto_login_e0f()
+                if new_token:
+                    token = new_token
+                    headers["Authorization"] = f"Bearer {token}"
+                    r_srv = requests.get(f"{API_BASE}/wireguard/servers", headers=headers, timeout=15)
             r_srv.raise_for_status()
             servers = r_srv.json()
         except Exception as e:
             logger.error(f"Failed fetching servers: {e}")
+            if "401" in str(e) and tg_token and tg_chat:
+                global last_auth_alert_time
+                now = time.time()
+                if now - last_auth_alert_time > 43200:
+                    last_auth_alert_time = now
+                    send_telegram_alert(
+                        tg_token,
+                        tg_chat,
+                        "⚠️ <b>e0f.cx: Истёк токен авторизации и автологин не удался!</b>\n\n"
+                        "Синхронизация новых серверов остановлена, отдаётся кэш.\n"
+                        "Пожалуйста, проверьте <code>EOF_EMAIL</code> и <code>EOF_PASSWORD</code> в .env."
+                    )
             load_profile_cache_from_disk()
             return {"error": f"Failed fetching servers: {e}"}
 
         try:
             r_cfg = requests.get(f"{API_BASE}/wireguard/configs", headers=headers, timeout=15)
+            if r_cfg.status_code == 401:
+                logger.info("e0f.cx returned 401 on configs, attempting auto-login refresh...")
+                new_token = auto_login_e0f()
+                if new_token:
+                    token = new_token
+                    headers["Authorization"] = f"Bearer {token}"
+                    r_cfg = requests.get(f"{API_BASE}/wireguard/configs", headers=headers, timeout=15)
             r_cfg.raise_for_status()
             configs = r_cfg.json()
         except Exception as e:
