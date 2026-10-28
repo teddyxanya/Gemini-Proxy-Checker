@@ -157,7 +157,8 @@ nano .env
 Заполните ваши параметры:
 * `SUB_URL`: ссылка на исходную подписку провайдера (VLESS, VMess, Trojan, SS, Hysteria2).
 * `GEMINI_API_KEY`: API-ключ Google AI Studio.
-* `EOF_TOKEN`: Bearer токен авторизации в e0f.cx.
+* `EOF_EMAIL`, `EOF_PASSWORD`: учётные данные личного кабинета e0f.cx для автоматической авторизации и продления токена.
+* `EOF_TOKEN`: Bearer токен авторизации в e0f.cx (обновляется автоматически при наличии email и пароля).
 * `SECRET_TOKEN`: секретный ключ по умолчанию для получения подписки.
 * `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `TELEGRAM_OWNER_ID`: данные вашего бота для алертов.
 * `GIT_REPO_URL`: ссылка на ваш GitHub-репозиторий для авто-пуша `shadowrocket.conf`.
