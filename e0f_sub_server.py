@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 e0f.cx Private Multi-Profile Telegram-Managed Subscription Daemon
-- Serves additional protocols (AWG 2.0 & 3.1, Mieru, TrustTunnel) to Shadowrocket.
+- Serves additional protocols (AWG 2.0 & 3.1, Mieru, TrustTunnel, Hysteria 2, NaiveProxy) to Shadowrocket.
 - Multi-profile management via Telegram Bot (@podpisici_bot):
     - /newprofile <name>  -> creates separate AWG configs on e0f + gives subscription link
     - /delprofile <name>  -> deletes that profile's AWG configs on e0f to free slots
@@ -10,7 +10,7 @@ e0f.cx Private Multi-Profile Telegram-Managed Subscription Daemon
     - /sync               -> force refresh from e0f API
 - AmneziaWG configs are strictly isolated: each profile only uses its own configs.
 - Slot limit monitoring: notifies in Telegram if any server runs out of slots.
-- Shared protocols (TrustTunnel, Mieru) are automatically included across all profiles.
+- Shared protocols (TrustTunnel, Mieru, Hysteria 2, NaiveProxy) are automatically included across all profiles.
 """
 
 import os
@@ -355,10 +355,11 @@ def send_telegram_alert(bot_token: str, chat_id: str, message: str):
 
 
 # =====================================================================
-# Shared Protocol Fetching (Mieru & TrustTunnel)
+# Shared Protocol Fetching (Mieru, TrustTunnel, Hysteria2, NaiveProxy)
 # =====================================================================
-def fetch_mieru_nodes(headers: dict) -> list:
+def fetch_mieru_nodes(headers: dict) -> tuple:
     nodes = []
+    servers = []
     try:
         r = requests.get(f"{API_BASE}/mieru/config", headers=headers, timeout=10)
         if r.status_code == 200:
@@ -382,11 +383,12 @@ def fetch_mieru_nodes(headers: dict) -> list:
                 nodes.append(link)
     except Exception as e:
         logger.error(f"Error fetching Mieru: {e}")
-    return nodes
+    return nodes, servers
 
 
-def fetch_trusttunnel_nodes(headers: dict) -> list:
+def fetch_trusttunnel_nodes(headers: dict) -> tuple:
     nodes = []
+    servers = []
     try:
         r = requests.get(f"{API_BASE}/trusttunnel/config", headers=headers, timeout=10)
         if r.status_code == 200:
@@ -413,11 +415,12 @@ def fetch_trusttunnel_nodes(headers: dict) -> list:
                 nodes.append(link)
     except Exception as e:
         logger.error(f"Error fetching TrustTunnel: {e}")
-    return nodes
+    return nodes, servers
 
 
-def fetch_hysteria2_nodes(headers: dict) -> list:
+def fetch_hysteria2_nodes(headers: dict) -> tuple:
     nodes = []
+    servers = []
     try:
         r = requests.get(f"{API_BASE}/hysteria2/subscription", headers=headers, timeout=10)
         if r.status_code == 200:
@@ -428,10 +431,13 @@ def fetch_hysteria2_nodes(headers: dict) -> list:
                 "Israel": "🇮🇱",
                 "USA": "🇺🇸"
             }
+            servers = data.get('servers', [])
             for link in data.get('links', []):
                 if '#' in link:
                     base_part, raw_tag = link.split('#', 1)
                     tag_name = urllib.parse.unquote(raw_tag)
+                    if not any(s.get('name') == tag_name for s in servers):
+                        servers.append({'name': tag_name})
                     flag = ""
                     for k, f in country_flags.items():
                         if k.lower() in tag_name.lower():
@@ -443,7 +449,32 @@ def fetch_hysteria2_nodes(headers: dict) -> list:
                     nodes.append(link)
     except Exception as e:
         logger.error(f"Error fetching Hysteria2: {e}")
-    return nodes
+    return nodes, servers
+
+
+def fetch_naive_nodes(headers: dict) -> tuple:
+    nodes = []
+    servers = []
+    try:
+        r = requests.get(f"{API_BASE}/naiveproxy/subscription", headers=headers, timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            servers = data.get('servers', [])
+            for s in servers:
+                link = s.get('link', '')
+                m = re.match(r"^(?:naive\+)?https?://([^#]+)(?:#(.*))?$", link)
+                if not m:
+                    continue
+                auth = m.group(1)
+                b64_auth = base64.b64encode(auth.encode('utf-8')).decode('ascii').rstrip('=')
+                flag = get_flag(s.get('countryCode', ''))
+                name = s.get('name', 'Server')
+                tag = f"{flag}EOFVPN {name} (Naive)"
+                formatted_link = f"https://{b64_auth}#{urllib.parse.quote(tag)}"
+                nodes.append(formatted_link)
+    except Exception as e:
+        logger.error(f"Error fetching NaiveProxy: {e}")
+    return nodes, servers
 
 
 # =====================================================================
@@ -589,9 +620,10 @@ def do_sync() -> dict:
         ]
 
         # 2. Shared protocols
-        mieru_uris = fetch_mieru_nodes(headers)
-        tt_uris = fetch_trusttunnel_nodes(headers)
-        hy2_uris = fetch_hysteria2_nodes(headers)
+        mieru_uris, mieru_servers = fetch_mieru_nodes(headers)
+        tt_uris, tt_servers = fetch_trusttunnel_nodes(headers)
+        hy2_uris, hy2_servers = fetch_hysteria2_nodes(headers)
+        naive_uris, naive_servers = fetch_naive_nodes(headers)
 
         # 3. Process each profile from profiles.json
         profiles = load_profiles()
@@ -607,7 +639,7 @@ def do_sync() -> dict:
             if p_warns:
                 all_warnings.extend([f"[{p_name}] {w}" for w in p_warns])
 
-            combined_uris = awg_uris + mieru_uris + tt_uris + hy2_uris
+            combined_uris = awg_uris + mieru_uris + tt_uris + hy2_uris + naive_uris
             sub_b64 = base64.b64encode("\n".join(combined_uris).encode('utf-8')).decode('ascii')
 
             p_cache_file = BASE_DIR / f"sub_cache_{p_name}.txt"
@@ -624,7 +656,7 @@ def do_sync() -> dict:
             }
 
             report_details.append(
-                f"👤 <b>{p_name}</b>: {len(awg_uris)} AWG + {len(mieru_uris)} Mieru + {len(tt_uris)} TT + {len(hy2_uris)} Hy2 = <b>{len(combined_uris)} узлов</b>"
+                f"👤 <b>{p_name}</b>: {len(awg_uris)} AWG + {len(mieru_uris)} Mieru + {len(tt_uris)} TT + {len(hy2_uris)} Hy2 + {len(naive_uris)} Naive = <b>{len(combined_uris)} узлов</b>"
             )
 
         # Maintain backward compatible default cache
@@ -640,6 +672,18 @@ def do_sync() -> dict:
 
         # Check server diff for Telegram notification
         curr_map = {str(s['id']): s.get('name') for s in servers if not s.get('unavailable', False)}
+        for s in naive_servers:
+            nid = f"naive_{s.get('id', s.get('name'))}"
+            curr_map[nid] = f"{s.get('name')} (Naive)"
+        for s in tt_servers:
+            tid = f"tt_{s.get('ip', s.get('name'))}"
+            curr_map[tid] = f"{s.get('name')} (TrustTunnel)"
+        for s in mieru_servers:
+            mid = f"mieru_{s.get('ip', s.get('name'))}"
+            curr_map[mid] = f"{s.get('name')} (Mieru)"
+        for s in hy2_servers:
+            hid = f"hy2_{s.get('name')}"
+            curr_map[hid] = f"{s.get('name')} (Hysteria2)"
         prev_map = {}
         if STATE_FILE.exists():
             try:
@@ -829,7 +873,7 @@ def execute_proxy_command(cmd: str, args: list, sender_user_id: str = "", chat_i
             "🔗 <b>Ссылка подписки для Shadowrocket:</b>",
             f"<code>{sub_url}</code>\n",
             f"⚡ <b>AmneziaWG:</b> {res['awg_count']} серверов (с тегом [{res['name']}])",
-            f"🛡 <b>Доп. протоколы:</b> {res['total_nodes'] - res['awg_count']} (Mieru, TrustTunnel, Hysteria2)",
+            f"🛡 <b>Доп. протоколы:</b> {res['total_nodes'] - res['awg_count']} (Mieru, TrustTunnel, Hysteria2, Naive)",
             f"Всего в подписке: <b>{res['total_nodes']} узлов</b>"
         ]
         if res.get("warnings"):
