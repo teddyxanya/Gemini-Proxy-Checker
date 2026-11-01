@@ -45,6 +45,62 @@ ENV_FILE = BASE_DIR / ".env"
 PROFILES_FILE = BASE_DIR / "profiles.json"
 STATE_FILE = BASE_DIR / "protocols_state.json"
 CHECKER_STATE_FILE = BASE_DIR / "checker_state.json"
+SHARED_PROTO_FILE = BASE_DIR / "shared_proto_state.json"
+
+# In-memory and disk-backed cache for shared protocols to prevent 429 rate-limiting wiping nodes
+shared_proto_cache: Dict[str, Any] = {
+    "mieru": ([], []),
+    "tt": ([], []),
+    "hy2": ([], []),
+    "naive": ([], [])
+}
+
+
+def load_shared_proto_cache_from_disk():
+    global shared_proto_cache
+    if SHARED_PROTO_FILE.exists():
+        try:
+            with open(SHARED_PROTO_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                for k in ["mieru", "tt", "hy2", "naive"]:
+                    if k in data and isinstance(data[k], dict):
+                        shared_proto_cache[k] = (data[k].get("nodes", []), data[k].get("servers", []))
+            logger.info("Loaded shared protocols state from disk: " +
+                        ", ".join([f"{k}: {len(v[0])} nodes" for k, v in shared_proto_cache.items()]))
+        except Exception as e:
+            logger.error(f"Error reading {SHARED_PROTO_FILE}: {e}")
+
+
+def save_shared_proto_cache_to_disk():
+    try:
+        data = {
+            k: {"nodes": v[0], "servers": v[1]}
+            for k, v in shared_proto_cache.items()
+        }
+        with open(SHARED_PROTO_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        logger.error(f"Error saving {SHARED_PROTO_FILE}: {e}")
+
+
+def fetch_api_with_retry(endpoint: str, headers: dict, max_retries: int = 3, timeout: int = 15) -> Optional[requests.Response]:
+    """Fetches an e0f API endpoint with polite retry and backoff on HTTP 429 (Too Many Requests)."""
+    url = f"{API_BASE}/{endpoint.lstrip('/')}"
+    for attempt in range(max_retries):
+        try:
+            r = requests.get(url, headers=headers, timeout=timeout)
+            if r.status_code == 429:
+                wait_s = 2.5 + attempt * 2
+                logger.warning(f"Rate limited (429) on {endpoint}. Backing off for {wait_s:.1f}s (attempt {attempt+1}/{max_retries})...")
+                time.sleep(wait_s)
+                continue
+            return r
+        except Exception as ex:
+            if attempt == max_retries - 1:
+                logger.error(f"Network error on {endpoint}: {ex}")
+                return None
+            time.sleep(2)
+    return None
 
 
 def get_vps_base_url() -> str:
@@ -358,15 +414,16 @@ def send_telegram_alert(bot_token: str, chat_id: str, message: str):
 # Shared Protocol Fetching (Mieru, TrustTunnel, Hysteria2, NaiveProxy)
 # =====================================================================
 def fetch_mieru_nodes(headers: dict) -> tuple:
-    nodes = []
-    servers = []
+    global shared_proto_cache
+    cached_nodes, cached_servers = shared_proto_cache.get("mieru", ([], []))
     try:
-        r = requests.get(f"{API_BASE}/mieru/config", headers=headers, timeout=10)
-        if r.status_code == 200:
+        r = fetch_api_with_retry("mieru/config", headers=headers, max_retries=3)
+        if r is not None and r.status_code == 200:
             data = r.json()
             username = data.get('username')
             password = data.get('password')
             servers = data.get('servers', [])
+            nodes = []
             for s in servers:
                 name = s.get('name', 'Server')
                 ip = s.get('ip')
@@ -381,21 +438,29 @@ def fetch_mieru_nodes(headers: dict) -> tuple:
                 tag = f"{flag}EOFVPN {name} (Mieru)"
                 link = f"mierus://{username}:{password}@{ip}?{query}#{urllib.parse.quote(tag)}"
                 nodes.append(link)
+            shared_proto_cache["mieru"] = (nodes, servers)
+            save_shared_proto_cache_to_disk()
+            return nodes, servers, True
+        else:
+            status = r.status_code if r else "no response"
+            logger.warning(f"Failed fetching Mieru ({status}). Preserving {len(cached_nodes)} cached nodes.")
+            return cached_nodes, cached_servers, False
     except Exception as e:
         logger.error(f"Error fetching Mieru: {e}")
-    return nodes, servers
+        return cached_nodes, cached_servers, False
 
 
 def fetch_trusttunnel_nodes(headers: dict) -> tuple:
-    nodes = []
-    servers = []
+    global shared_proto_cache
+    cached_nodes, cached_servers = shared_proto_cache.get("tt", ([], []))
     try:
-        r = requests.get(f"{API_BASE}/trusttunnel/config", headers=headers, timeout=10)
-        if r.status_code == 200:
+        r = fetch_api_with_retry("trusttunnel/config", headers=headers, max_retries=3)
+        if r is not None and r.status_code == 200:
             data = r.json()
             username = data.get('username')
             password = data.get('password')
             servers = data.get('servers', [])
+            nodes = []
             for s in servers:
                 name = s.get('name', 'Server')
                 ip = s.get('ip')
@@ -413,17 +478,24 @@ def fetch_trusttunnel_nodes(headers: dict) -> tuple:
                     version=1
                 )
                 nodes.append(link)
+            shared_proto_cache["tt"] = (nodes, servers)
+            save_shared_proto_cache_to_disk()
+            return nodes, servers, True
+        else:
+            status = r.status_code if r else "no response"
+            logger.warning(f"Failed fetching TrustTunnel ({status}). Preserving {len(cached_nodes)} cached nodes.")
+            return cached_nodes, cached_servers, False
     except Exception as e:
         logger.error(f"Error fetching TrustTunnel: {e}")
-    return nodes, servers
+        return cached_nodes, cached_servers, False
 
 
 def fetch_hysteria2_nodes(headers: dict) -> tuple:
-    nodes = []
-    servers = []
+    global shared_proto_cache
+    cached_nodes, cached_servers = shared_proto_cache.get("hy2", ([], []))
     try:
-        r = requests.get(f"{API_BASE}/hysteria2/subscription", headers=headers, timeout=10)
-        if r.status_code == 200:
+        r = fetch_api_with_retry("hysteria2/subscription", headers=headers, max_retries=3)
+        if r is not None and r.status_code == 200:
             data = r.json()
             country_flags = {
                 "Czech": "🇨🇿",
@@ -432,6 +504,7 @@ def fetch_hysteria2_nodes(headers: dict) -> tuple:
                 "USA": "🇺🇸"
             }
             servers = data.get('servers', [])
+            nodes = []
             for link in data.get('links', []):
                 if '#' in link:
                     base_part, raw_tag = link.split('#', 1)
@@ -447,19 +520,27 @@ def fetch_hysteria2_nodes(headers: dict) -> tuple:
                     nodes.append(f"{base_part}#{urllib.parse.quote(new_tag)}")
                 else:
                     nodes.append(link)
+            shared_proto_cache["hy2"] = (nodes, servers)
+            save_shared_proto_cache_to_disk()
+            return nodes, servers, True
+        else:
+            status = r.status_code if r else "no response"
+            logger.warning(f"Failed fetching Hysteria2 ({status}). Preserving {len(cached_nodes)} cached nodes.")
+            return cached_nodes, cached_servers, False
     except Exception as e:
         logger.error(f"Error fetching Hysteria2: {e}")
-    return nodes, servers
+        return cached_nodes, cached_servers, False
 
 
 def fetch_naive_nodes(headers: dict) -> tuple:
-    nodes = []
-    servers = []
+    global shared_proto_cache
+    cached_nodes, cached_servers = shared_proto_cache.get("naive", ([], []))
     try:
-        r = requests.get(f"{API_BASE}/naiveproxy/subscription", headers=headers, timeout=10)
-        if r.status_code == 200:
+        r = fetch_api_with_retry("naiveproxy/subscription", headers=headers, max_retries=3)
+        if r is not None and r.status_code == 200:
             data = r.json()
             servers = data.get('servers', [])
+            nodes = []
             for s in servers:
                 link = s.get('link', '')
                 m = re.match(r"^(?:naive\+)?https?://([^#]+)(?:#(.*))?$", link)
@@ -472,9 +553,16 @@ def fetch_naive_nodes(headers: dict) -> tuple:
                 tag = f"{flag}EOFVPN {name} (Naive)"
                 formatted_link = f"https://{b64_auth}#{urllib.parse.quote(tag)}"
                 nodes.append(formatted_link)
+            shared_proto_cache["naive"] = (nodes, servers)
+            save_shared_proto_cache_to_disk()
+            return nodes, servers, True
+        else:
+            status = r.status_code if r else "no response"
+            logger.warning(f"Failed fetching NaiveProxy ({status}). Preserving {len(cached_nodes)} cached nodes.")
+            return cached_nodes, cached_servers, False
     except Exception as e:
         logger.error(f"Error fetching NaiveProxy: {e}")
-    return nodes, servers
+        return cached_nodes, cached_servers, False
 
 
 # =====================================================================
@@ -570,14 +658,16 @@ def do_sync() -> dict:
 
         # 1. Fetch servers and user configs
         try:
-            r_srv = requests.get(f"{API_BASE}/wireguard/servers", headers=headers, timeout=15)
-            if r_srv.status_code == 401:
+            r_srv = fetch_api_with_retry("wireguard/servers", headers=headers, max_retries=3, timeout=15)
+            if r_srv is not None and r_srv.status_code == 401:
                 logger.info("e0f.cx returned 401 on servers, attempting auto-login refresh...")
                 new_token = auto_login_e0f()
                 if new_token:
                     token = new_token
                     headers["Authorization"] = f"Bearer {token}"
-                    r_srv = requests.get(f"{API_BASE}/wireguard/servers", headers=headers, timeout=15)
+                    r_srv = fetch_api_with_retry("wireguard/servers", headers=headers, max_retries=3, timeout=15)
+            if r_srv is None:
+                raise Exception("wireguard/servers request failed (None response)")
             r_srv.raise_for_status()
             servers = r_srv.json()
         except Exception as e:
@@ -597,15 +687,19 @@ def do_sync() -> dict:
             load_profile_cache_from_disk()
             return {"error": f"Failed fetching servers: {e}"}
 
+        time.sleep(1.0)
         try:
-            r_cfg = requests.get(f"{API_BASE}/wireguard/configs", headers=headers, timeout=15)
-            if r_cfg.status_code == 401:
+            r_cfg = fetch_api_with_retry("wireguard/configs", headers=headers, max_retries=3, timeout=15)
+            if r_cfg is not None and r_cfg.status_code == 401:
                 logger.info("e0f.cx returned 401 on configs, attempting auto-login refresh...")
                 new_token = auto_login_e0f()
                 if new_token:
                     token = new_token
                     headers["Authorization"] = f"Bearer {token}"
-                    r_cfg = requests.get(f"{API_BASE}/wireguard/configs", headers=headers, timeout=15)
+                    time.sleep(1.0)
+                    r_cfg = fetch_api_with_retry("wireguard/configs", headers=headers, max_retries=3, timeout=15)
+            if r_cfg is None:
+                raise Exception("wireguard/configs request failed (None response)")
             r_cfg.raise_for_status()
             configs = r_cfg.json()
         except Exception as e:
@@ -619,11 +713,15 @@ def do_sync() -> dict:
             if not s.get('unavailable', False) and str(s['id']) not in ('105', '61')
         ]
 
-        # 2. Shared protocols
-        mieru_uris, mieru_servers = fetch_mieru_nodes(headers)
-        tt_uris, tt_servers = fetch_trusttunnel_nodes(headers)
-        hy2_uris, hy2_servers = fetch_hysteria2_nodes(headers)
-        naive_uris, naive_servers = fetch_naive_nodes(headers)
+        # 2. Shared protocols (with slight delays to respect e0f rate limiter)
+        time.sleep(1.0)
+        mieru_uris, mieru_servers, mieru_ok = fetch_mieru_nodes(headers)
+        time.sleep(1.0)
+        tt_uris, tt_servers, tt_ok = fetch_trusttunnel_nodes(headers)
+        time.sleep(1.0)
+        hy2_uris, hy2_servers, hy2_ok = fetch_hysteria2_nodes(headers)
+        time.sleep(1.0)
+        naive_uris, naive_servers, naive_ok = fetch_naive_nodes(headers)
 
         # 3. Process each profile from profiles.json
         profiles = load_profiles()
@@ -692,8 +790,22 @@ def do_sync() -> dict:
             except Exception:
                 pass
 
+        # Ignore protocols whose API call failed so temporary glitches/429 never trigger false deletion alerts
+        failed_proto_prefixes = []
+        if not tt_ok:
+            failed_proto_prefixes.append("tt_")
+        if not hy2_ok:
+            failed_proto_prefixes.append("hy2_")
+        if not naive_ok:
+            failed_proto_prefixes.append("naive_")
+        if not mieru_ok:
+            failed_proto_prefixes.append("mieru_")
+
         new_servers = [name for sid, name in curr_map.items() if sid not in prev_map]
-        lost_servers = [name for sid, name in prev_map.items() if sid not in curr_map]
+        lost_servers = [
+            name for sid, name in prev_map.items()
+            if sid not in curr_map and not any(sid.startswith(pref) for pref in failed_proto_prefixes)
+        ]
 
         if (new_servers or lost_servers or all_warnings) and tg_token and tg_chat:
             msg_lines = ["<b>⚡ e0f.cx: Обновление протоколов</b>\n"]
@@ -800,7 +912,8 @@ def delete_profile_via_telegram(name: str) -> dict:
     if token:
         headers = {"Authorization": f"Bearer {token}"}
         try:
-            r_cfg = requests.get(f"{API_BASE}/wireguard/configs", headers=headers, timeout=15)
+            time.sleep(1.0)
+            r_cfg = fetch_api_with_retry("wireguard/configs", headers=headers, max_retries=3, timeout=15)
             if r_cfg.status_code == 200:
                 for c in r_cfg.json():
                     if c.get('name') == real_name:
@@ -1318,6 +1431,7 @@ def run_server(port: int = 8088):
 
     # Load cached profiles from disk first so service is ready immediately
     load_profile_cache_from_disk()
+    load_shared_proto_cache_from_disk()
 
     # Initial sync
     do_sync()

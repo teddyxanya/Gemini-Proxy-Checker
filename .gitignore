@@ -14,12 +14,13 @@ checker_state.json
 *server_state.json
 music_pending/
 protocols_state.json
+shared_proto_state.json
 sub_cache_*.txt
 awg_*
 profiles.json
 
 # Scratch & test scripts
 patch*.py
-fix.py
+fix*.py
 test_*.py
 inspect_*.py
