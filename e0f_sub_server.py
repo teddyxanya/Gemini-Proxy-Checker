@@ -48,8 +48,6 @@ CHECKER_STATE_FILE = BASE_DIR / "checker_state.json"
 SHARED_PROTO_FILE = BASE_DIR / "shared_proto_state.json"
 
 # In-memory and disk-backed cache for shared protocols to prevent 429 rate-limiting wiping nodes
-SPB_TRANSIT_URI = (os.getenv("SPB_TRANSIT_URI") or "").strip()
-
 shared_proto_cache: Dict[str, Any] = {
     "mieru": ([], []),
     "tt": ([], []),
@@ -739,7 +737,8 @@ def do_sync() -> dict:
             if p_warns:
                 all_warnings.extend([f"[{p_name}] {w}" for w in p_warns])
 
-            transit_nodes = [SPB_TRANSIT_URI] if SPB_TRANSIT_URI else []
+            spb_transit_uri = (env_vars.get("SPB_TRANSIT_URI") or os.getenv("SPB_TRANSIT_URI") or "").strip()
+            transit_nodes = [spb_transit_uri] if spb_transit_uri else []
             combined_uris = transit_nodes + awg_uris + mieru_uris + tt_uris + hy2_uris + naive_uris
             sub_b64 = base64.b64encode("\n".join(combined_uris).encode('utf-8')).decode('ascii')
 
