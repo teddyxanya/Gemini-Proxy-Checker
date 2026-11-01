@@ -48,6 +48,8 @@ CHECKER_STATE_FILE = BASE_DIR / "checker_state.json"
 SHARED_PROTO_FILE = BASE_DIR / "shared_proto_state.json"
 
 # In-memory and disk-backed cache for shared protocols to prevent 429 rate-limiting wiping nodes
+SPB_TRANSIT_URI = (os.getenv("SPB_TRANSIT_URI") or "").strip()
+
 shared_proto_cache: Dict[str, Any] = {
     "mieru": ([], []),
     "tt": ([], []),
@@ -737,7 +739,8 @@ def do_sync() -> dict:
             if p_warns:
                 all_warnings.extend([f"[{p_name}] {w}" for w in p_warns])
 
-            combined_uris = awg_uris + mieru_uris + tt_uris + hy2_uris + naive_uris
+            transit_nodes = [SPB_TRANSIT_URI] if SPB_TRANSIT_URI else []
+            combined_uris = transit_nodes + awg_uris + mieru_uris + tt_uris + hy2_uris + naive_uris
             sub_b64 = base64.b64encode("\n".join(combined_uris).encode('utf-8')).decode('ascii')
 
             p_cache_file = BASE_DIR / f"sub_cache_{p_name}.txt"
@@ -754,7 +757,7 @@ def do_sync() -> dict:
             }
 
             report_details.append(
-                f"👤 <b>{p_name}</b>: {len(awg_uris)} AWG + {len(mieru_uris)} Mieru + {len(tt_uris)} TT + {len(hy2_uris)} Hy2 + {len(naive_uris)} Naive = <b>{len(combined_uris)} узлов</b>"
+                f"👤 <b>{p_name}</b>: {len(awg_uris)} AWG + {len(mieru_uris)} Mieru + {len(tt_uris)} TT + {len(hy2_uris)} Hy2 + {len(naive_uris)} Naive" + (" + 1 Relay" if transit_nodes else "") + f" = <b>{len(combined_uris)} узлов</b>"
             )
 
         # Maintain backward compatible default cache
