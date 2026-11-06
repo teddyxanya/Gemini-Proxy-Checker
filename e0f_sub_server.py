@@ -382,7 +382,7 @@ def config_to_wireguard_node(conf_text: str, server_name: str, country_code: str
     if country_code:
         params['flag'] = country_code.upper()
 
-    query = urllib.parse.urlencode(params)
+    query = urllib.parse.urlencode(params, quote_via=urllib.parse.quote)
     clean_uri = f"wg://{endpoint}?{query}#{urllib.parse.quote(tag)}"
 
     return {
@@ -737,8 +737,11 @@ def do_sync() -> dict:
             if p_warns:
                 all_warnings.extend([f"[{p_name}] {w}" for w in p_warns])
 
-            spb_transit_uri = (env_vars.get("SPB_TRANSIT_URI") or os.getenv("SPB_TRANSIT_URI") or "").strip()
-            transit_nodes = [spb_transit_uri] if spb_transit_uri else []
+            transit_nodes = []
+            for k in ["SPB_RELAY_SS_URI", "SPB_RELAY_VLESS_URI", "SPB_TRANSIT_URI"]:
+                uri = (env_vars.get(k) or os.getenv(k) or "").strip()
+                if uri:
+                    transit_nodes.append(uri)
             combined_uris = transit_nodes + awg_uris + mieru_uris + tt_uris + hy2_uris + naive_uris
             sub_b64 = base64.b64encode("\n".join(combined_uris).encode('utf-8')).decode('ascii')
 
