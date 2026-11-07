@@ -1,0 +1,12 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "sub-worker",
+  "main": "src/index.js",
+  "compatibility_date": "2024-11-01",
+  "kv_namespaces": [
+    {
+      "binding": "SUB_CACHE",
+      "id": "YOUR_KV_NAMESPACE_ID"
+    }
+  ]
+}
