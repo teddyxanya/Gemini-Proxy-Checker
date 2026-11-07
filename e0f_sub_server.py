@@ -1324,10 +1324,14 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
 
         # 1. Health check
         if path == "/health":
+            resp_bytes = json.dumps({"status": "healthy", "service": "e0f-telegram-sub"}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(resp_bytes)))
+            self.send_header("Connection", "close")
             self.end_headers()
-            self.wfile.write(json.dumps({"status": "healthy", "service": "e0f-telegram-sub"}).encode())
+            if self.command != 'HEAD':
+                self.wfile.write(resp_bytes)
             return
 
         # 2. Trigger sync
@@ -1361,21 +1365,28 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
                 return
 
             sub_b64 = matched_profile["b64"]
+            sub_bytes = sub_b64.encode('ascii')
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(sub_bytes)))
+            self.send_header("Connection", "close")
             self.send_header("Subscription-Userinfo", f"upload=0; download=0; total=1073741824000; expire=2148091000")
             self.send_header("Profile-Update-Interval", "12")
             self.end_headers()
-            self.wfile.write(sub_b64.encode('ascii'))
+            if self.command != 'HEAD':
+                self.wfile.write(sub_bytes)
             return
 
         # 4. Web status page (public)
         if path == "/status":
-            html = build_status_page()
+            html_bytes = build_status_page().encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(html_bytes)))
+            self.send_header("Connection", "close")
             self.end_headers()
-            self.wfile.write(html.encode("utf-8"))
+            if self.command != 'HEAD':
+                self.wfile.write(html_bytes)
             return
 
 
