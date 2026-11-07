@@ -759,7 +759,7 @@ def do_sync() -> dict:
             }
 
             report_details.append(
-                f"👤 <b>{p_name}</b>: {len(awg_uris)} AWG + {len(mieru_uris)} Mieru + {len(tt_uris)} TT + {len(hy2_uris)} Hy2 + {len(naive_uris)} Naive" + (" + 1 Relay" if transit_nodes else "") + f" = <b>{len(combined_uris)} узлов</b>"
+                f"👤 <b>{p_name}</b>: {len(awg_uris)} AWG + {len(mieru_uris)} Mieru + {len(tt_uris)} TT + {len(hy2_uris)} Hy2 + {len(naive_uris)} Naive" + (f" + {len(transit_nodes)} Relay" if transit_nodes else "") + f" = <b>{len(combined_uris)} узлов</b>"
             )
 
         # Maintain backward compatible default cache
@@ -1309,6 +1309,9 @@ def build_status_page() -> str:
 # HTTP Request Handler
 # =====================================================================
 class SubscriptionHandler(BaseHTTPRequestHandler):
+    def do_HEAD(self):
+        self.do_GET()
+
     def log_message(self, format, *args):
         logger.info(f"{self.client_address[0]} - {args[0]} {args[1]}")
 
