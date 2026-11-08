@@ -103,25 +103,34 @@ def fetch_api_with_retry(endpoint: str, headers: dict, max_retries: int = 3, tim
     return None
 
 
+def clean_base_url(url: str) -> str:
+    """Strips quotes, backslashes, leading/trailing whitespace and slashes."""
+    if not url:
+        return ""
+    return url.strip().strip('"\'').strip('\\/').rstrip('/\\')
+
+
 def get_sub_urls(token: str) -> dict:
     """Returns primary (Origin VPS) and backup (Cloudflare Edge DR) subscription URLs."""
-    origin_base = os.getenv("ORIGIN_SUB_URL") or os.getenv("SUB_ORIGIN_URL")
+    origin_raw = os.getenv("ORIGIN_SUB_URL") or os.getenv("SUB_ORIGIN_URL")
+    origin_base = clean_base_url(origin_raw)
     if not origin_base:
         vps_ip = os.getenv("VPS_IP", "127.0.0.1")
         port = os.getenv("PORT", "8088")
         origin_base = f"http://{vps_ip}:{port}"
-    backup_base = os.getenv("EDGE_SUB_URL") or os.getenv("BACKUP_SUB_URL") or os.getenv("PUBLIC_SUB_URL") or origin_base
+    backup_raw = os.getenv("EDGE_SUB_URL") or os.getenv("BACKUP_SUB_URL") or os.getenv("PUBLIC_SUB_URL")
+    backup_base = clean_base_url(backup_raw) or origin_base
     return {
-        "origin": f"{origin_base.rstrip('/')}/sub?token={token}",
-        "backup": f"{backup_base.rstrip('/')}/sub?token={token}"
+        "origin": f"{origin_base}/sub?token={token}",
+        "backup": f"{backup_base}/sub?token={token}"
     }
 
 
 def get_vps_base_url() -> str:
     """Returns base primary Origin URL using ORIGIN_SUB_URL or VPS_IP fallback"""
-    origin_base = os.getenv("ORIGIN_SUB_URL") or os.getenv("SUB_ORIGIN_URL")
+    origin_base = clean_base_url(os.getenv("ORIGIN_SUB_URL") or os.getenv("SUB_ORIGIN_URL"))
     if origin_base:
-        return origin_base.rstrip("/")
+        return origin_base
     vps_ip = os.getenv("VPS_IP", "127.0.0.1")
     port = os.getenv("PORT", "8088")
     return f"http://{vps_ip}:{port}"
