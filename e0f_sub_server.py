@@ -103,12 +103,26 @@ def fetch_api_with_retry(endpoint: str, headers: dict, max_retries: int = 3, tim
     return None
 
 
+def get_sub_urls(token: str) -> dict:
+    """Returns primary (Origin VPS) and backup (Cloudflare Edge DR) subscription URLs."""
+    origin_base = os.getenv("ORIGIN_SUB_URL") or os.getenv("SUB_ORIGIN_URL")
+    if not origin_base:
+        vps_ip = os.getenv("VPS_IP", "127.0.0.1")
+        port = os.getenv("PORT", "8088")
+        origin_base = f"http://{vps_ip}:{port}"
+    backup_base = os.getenv("EDGE_SUB_URL") or os.getenv("BACKUP_SUB_URL") or os.getenv("PUBLIC_SUB_URL") or origin_base
+    return {
+        "origin": f"{origin_base.rstrip('/')}/sub?token={token}",
+        "backup": f"{backup_base.rstrip('/')}/sub?token={token}"
+    }
+
+
 def get_vps_base_url() -> str:
-    """Returns base HTTPS URL using VPS_IP from env, fallback to localhost"""
+    """Returns base primary Origin URL using ORIGIN_SUB_URL or VPS_IP fallback"""
+    origin_base = os.getenv("ORIGIN_SUB_URL") or os.getenv("SUB_ORIGIN_URL")
+    if origin_base:
+        return origin_base.rstrip("/")
     vps_ip = os.getenv("VPS_IP", "127.0.0.1")
-    public_url = os.getenv("PUBLIC_SUB_URL") or os.getenv("SUB_BASE_URL")
-    if public_url:
-        return public_url.rstrip("/")
     port = os.getenv("PORT", "8088")
     return f"http://{vps_ip}:{port}"
 API_BASE = "https://e0f.cx/api"
@@ -992,11 +1006,12 @@ def execute_proxy_command(cmd: str, args: list, sender_user_id: str = "", chat_i
         res = add_new_profile_via_telegram(p_name)
         if "error" in res:
             return {"handled": True, "text": f"❌ Ошибка: {res['error']}"}
-        sub_url = f"{get_vps_base_url()}/sub?token={res['sub_token']}"
+        urls = get_sub_urls(res['sub_token'])
         lines = [
             f"✅ <b>Профиль «{res['name']}» успешно создан!</b>\n",
-            "🔗 <b>Ссылка подписки для Shadowrocket:</b>",
-            f"<code>{sub_url}</code>\n",
+            "🔗 <b>Ссылки подписки для Shadowrocket:</b>",
+            f"🔹 <b>Основная (Origin VPS):</b>\n<code>{urls['origin']}</code>",
+            f"🔸 <b>Резервная (Cloudflare Edge):</b>\n<code>{urls['backup']}</code>\n",
             f"⚡ <b>AmneziaWG:</b> {res['awg_count']} серверов (с тегом [{res['name']}])",
             f"🛡 <b>Доп. протоколы:</b> {res['total_nodes'] - res['awg_count']} (Mieru, TrustTunnel, Hysteria2, Naive)",
             f"Всего в подписке: <b>{res['total_nodes']} узлов</b>"
@@ -1029,12 +1044,13 @@ def execute_proxy_command(cmd: str, args: list, sender_user_id: str = "", chat_i
         lines = ["📋 <b>Активные профили подписок:</b>\n"]
         for k, p in profiles.items():
             p_name = p["name"]
-            sub_url = f"{get_vps_base_url()}/sub?token={p['sub_token']}"
+            urls = get_sub_urls(p["sub_token"])
             info = profile_cache.get(p["sub_token"], {})
             total = info.get("total_count", 0)
             awg = info.get("awg_count", 0)
             lines.append(f"👤 <b>Профиль: {p_name}</b> ({total} узлов, AWG: {awg})")
-            lines.append(f"🔗 <code>{sub_url}</code>\n")
+            lines.append(f"🔹 <b>Основная (Origin):</b>\n<code>{urls['origin']}</code>")
+            lines.append(f"🔸 <b>Резервная (Cloudflare):</b>\n<code>{urls['backup']}</code>\n")
         return {"handled": True, "text": "\n".join(lines)}
 
     # 5. /status

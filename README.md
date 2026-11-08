@@ -301,8 +301,8 @@ sudo systemctl enable --now e0f-sub
 * 🛡️ **AmneziaWG 3.1 & WireGuard Protocol Parity**:
   * Реализована строгая нормализация кодирования параметров обфускации AWG 3.1 (`quote_via=urllib.parse.quote`) — исключена подмена пробелов на `+` внутри инструкций пакетов (`I1`–`I5`), что гарантирует бесшовный импорт в Shadowrocket build 3480+.
   * Добавлен автоматический проброс `keepalive` из секции `[Peer] PersistentKeepalive` в URI `wg://`, предотвращающий разрывы UDP-сессий сотовыми операторами при простое.
-* 🌐 **Поддержка PUBLIC_SUB_URL в get_vps_base_url()**:
-  * Ссылки профилей в Telegram-боте (`/profiles`, `/newprofile`) теперь формируются с кастомным доменом Edge DR (`https://sub.<domain>`), а не с прямым IP и устаревшим портом `:8081`.
+* 🌐 **Двойные ссылки подписок (Origin VPS + Cloudflare Edge DR)**:
+  * В командах управления профилями (`/profiles`, `/newprofile`) реализована одновременная выдача сразу двух ссылок: основной прямой (`https://origin.<domain>`) и резервной отказоустойчивой через Cloudflare Edge KV (`https://sub.<domain>`).
 
 ### v2.3.0 (2026-11-08)
 * ☁️ **Cloudflare Disaster Recovery Sub Server**:
