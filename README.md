@@ -303,6 +303,7 @@ sudo systemctl enable --now e0f-sub
   * Добавлен автоматический проброс `keepalive` из секции `[Peer] PersistentKeepalive` в URI `wg://`, предотвращающий разрывы UDP-сессий сотовыми операторами при простое.
 * 🌐 **Двойные ссылки подписок (Origin VPS + Cloudflare Edge DR)**:
   * В командах управления профилями (`/profiles`, `/newprofile`) реализована одновременная выдача сразу двух ссылок: основной прямой (`https://origin.<domain>`) и резервной отказоустойчивой через Cloudflare Edge KV (`https://sub.<domain>`).
+  * Добавлена строгая санитизация URL (`clean_base_url`), исключающая появление случайных экранирующих слэшей, кавычек или пробелов.
 
 ### v2.3.0 (2026-11-08)
 * ☁️ **Cloudflare Disaster Recovery Sub Server**:
