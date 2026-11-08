@@ -106,7 +106,11 @@ def fetch_api_with_retry(endpoint: str, headers: dict, max_retries: int = 3, tim
 def get_vps_base_url() -> str:
     """Returns base HTTPS URL using VPS_IP from env, fallback to localhost"""
     vps_ip = os.getenv("VPS_IP", "127.0.0.1")
-    return f"http://{vps_ip}:8081"
+    public_url = os.getenv("PUBLIC_SUB_URL") or os.getenv("SUB_BASE_URL")
+    if public_url:
+        return public_url.rstrip("/")
+    port = os.getenv("PORT", "8088")
+    return f"http://{vps_ip}:{port}"
 API_BASE = "https://e0f.cx/api"
 
 # Cache: { sub_token: { "b64": str, "name": str, "awg_count": int, "total_count": int } }
