@@ -297,6 +297,11 @@ sudo systemctl enable --now e0f-sub
 
 ## 📝 История изменений (Changelog)
 
+### v2.3.1 (2026-11-08)
+* 🛡️ **AmneziaWG 3.1 & WireGuard Protocol Parity**:
+  * Реализована строгая нормализация кодирования параметров обфускации AWG 3.1 (`quote_via=urllib.parse.quote`) — исключена подмена пробелов на `+` внутри инструкций пакетов (`I1`–`I5`), что гарантирует бесшовный импорт в Shadowrocket build 3480+.
+  * Добавлен автоматический проброс `keepalive` из секции `[Peer] PersistentKeepalive` в URI `wg://`, предотвращающий разрывы UDP-сессий сотовыми операторами при простое.
+
 ### v2.3.0 (2026-11-08)
 * ☁️ **Cloudflare Disaster Recovery Sub Server**:
   * Развёрнут и запущен Edge-воркер (`sub-worker`) с поддержкой проксирования на VPS и аварийного кэширования в **Cloudflare KV**.

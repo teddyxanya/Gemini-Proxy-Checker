@@ -339,6 +339,7 @@ def config_to_wireguard_node(conf_text: str, server_name: str, country_code: str
     ip = iface.get('address', '').replace('/32', '')
     mtu = iface.get('mtu', '1280')
     dns = iface.get('dns', '77.88.8.1').replace(' ', '')
+    keepalive = peer.get('persistentkeepalive', '')
 
     obfs_dict = {}
     standard_keys = {'privatekey', 'address', 'dns', 'mtu'}
@@ -374,6 +375,8 @@ def config_to_wireguard_node(conf_text: str, server_name: str, country_code: str
     params['mtu'] = mtu
     params['dns'] = dns
     params['udp'] = '1'
+    if keepalive:
+        params['keepalive'] = keepalive
 
     if obfs_dict:
         params['obfs'] = 'amneziawg'
