@@ -585,6 +585,11 @@ def fetch_naive_nodes(headers: dict) -> tuple:
                 nodes.append(formatted_link)
             shared_proto_cache["naive"] = (nodes, servers)
             save_shared_proto_cache_to_disk()
+            try:
+                import subprocess
+                subprocess.Popen(["/usr/bin/python3", "/root/scripts/n8n_proxy_watchdog.py"])
+            except Exception as _e:
+                logger.error(f"Failed to trigger proxy watchdog: {_e}")
             return nodes, servers, True
         else:
             status = r.status_code if r else "no response"

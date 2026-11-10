@@ -911,7 +911,8 @@ def main():
     added_web = new_web - old_web
     lost_web = old_web - new_web
 
-    if added_web or lost_web:
+    notify_enabled = os.getenv("ENABLE_TELEGRAM_REPORTS", "true").lower() in ("true", "1", "yes")
+    if (added_web or lost_web) and notify_enabled:
         lines = ["🤖 <b>Gemini Proxy Checker (Авто-Отчёт)</b>\n"]
         lines.append(f"<b>Всего серверов (Web + API):</b> {len(new_web)}")
         if added_web:
