@@ -1408,11 +1408,30 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(sub_bytes)))
             self.send_header("Connection", "close")
             self.send_header("Subscription-Userinfo", f"upload=0; download=0; total=1073741824000; expire=2148091000")
-            self.send_header("Profile-Update-Interval", "12")
+            self.send_header("Profile-Update-Interval", "1")
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Expires", "0")
             self.end_headers()
             if self.command != 'HEAD':
                 self.wfile.write(sub_bytes)
             return
+
+        # 3.1 Shadowrocket conf endpoint
+        if path in ("/conf", "/shadowrocket.conf"):
+            conf_path = Path(__file__).resolve().parent / "shadowrocket.conf"
+            if conf_path.exists():
+                conf_bytes = conf_path.read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(len(conf_bytes)))
+                self.send_header("Connection", "close")
+                self.send_header("Profile-Update-Interval", "1")
+                self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+                self.end_headers()
+                if self.command != 'HEAD':
+                    self.wfile.write(conf_bytes)
+                return
 
         # 4. Web status page (public)
         if path == "/status":
