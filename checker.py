@@ -797,6 +797,131 @@ def update_shadowrocket_conf(conf_path: Path, passed_api_tags: list, passed_web_
     return True
 
 
+def update_xray_client_config(candidates: list, xray_conf_path: Path = Path("/root/xray/config.json")) -> bool:
+    """
+    Auto-updates the local Docker Xray HTTP proxy (/root/xray/config.json, port 1080)
+    with up to 5 top working nodes using burstObservatory + leastLoad failover.
+    """
+    if not xray_conf_path.exists():
+        return False
+
+    # Prioritize nodes passing both web & api, exclude local SPB relay/Russia
+    sorted_candidates = sorted(candidates, key=lambda x: x[0], reverse=True)
+    auto_outbounds = []
+    seen_hosts = set()
+
+    for _, uri, tag in sorted_candidates:
+        if any(k in tag.lower() for k in ("spb", "russia", "transit")):
+            continue
+        parsed_uri = urllib.parse.urlparse(uri)
+        if parsed_uri.hostname == "194.87.196.158":
+            continue
+        _, outbounds = parse_node_xray(uri)
+        if not outbounds:
+            continue
+        ob = dict(outbounds[0])
+        host_key = f"{parsed_uri.hostname}:{parsed_uri.port}"
+        if host_key in seen_hosts:
+            continue
+        seen_hosts.add(host_key)
+        ob["tag"] = f"auto-{len(auto_outbounds) + 1}"
+        auto_outbounds.append(ob)
+        if len(auto_outbounds) >= 5:
+            break
+
+    if not auto_outbounds:
+        logger.warning("No suitable Xray candidates found to update /root/xray/config.json.")
+        return False
+
+    new_cfg = {
+        "log": {"loglevel": "warning"},
+        "inbounds": [
+            {
+                "tag": "http-in",
+                "port": 1080,
+                "listen": "0.0.0.0",
+                "protocol": "http",
+                "settings": {"allowTransparent": False}
+            }
+        ],
+        "burstObservatory": {
+            "subjectSelector": ["auto-"],
+            "pingConfig": {
+                "destination": "https://www.gstatic.com/generate_204",
+                "connectivity": "http://cp.cloudflare.com/generate_204",
+                "interval": "5m",
+                "sampling": 2,
+                "timeout": "8s"
+            }
+        },
+        "outbounds": auto_outbounds + [
+            {"tag": "direct", "protocol": "freedom", "settings": {}}
+        ],
+        "routing": {
+            "domainStrategy": "AsIs",
+            "balancers": [
+                {
+                    "tag": "auto-balancer",
+                    "selector": ["auto-"],
+                    "strategy": {"type": "leastLoad", "settings": {"expected": 1}},
+                    "fallbackTag": "direct"
+                }
+            ],
+            "rules": [
+                {
+                    "type": "field",
+                    "inboundTag": ["http-in"],
+                    "balancerTag": "auto-balancer"
+                }
+            ]
+        }
+    }
+
+    new_json = json.dumps(new_cfg, ensure_ascii=False, indent=2)
+    try:
+        current_json = xray_conf_path.read_text(encoding="utf-8")
+        if current_json.strip() == new_json.strip():
+            logger.info("Xray client config is already up to date.")
+            return True
+    except Exception:
+        pass
+
+    tmp_path = xray_conf_path.with_name(xray_conf_path.stem + ".tmp.json")
+    tmp_path.write_text(new_json, encoding="utf-8")
+
+    # Validate syntax with xray binary before applying
+    xray_bin = "/usr/local/bin/xray" if Path("/usr/local/bin/xray").exists() else "xray"
+    try:
+        res = subprocess.run([xray_bin, "run", "-test", "-c", str(tmp_path)], capture_output=True, text=True, timeout=15)
+        if res.returncode != 0:
+            logger.error(f"Generated Xray config failed validation: {res.stderr or res.stdout}")
+            tmp_path.unlink(missing_ok=True)
+            return False
+    except Exception as e:
+        logger.warning(f"Could not run xray -test ({e}), skipping Xray client update.")
+        tmp_path.unlink(missing_ok=True)
+        return False
+
+    bak_path = xray_conf_path.with_suffix(".json.bak")
+    if not bak_path.exists():
+        try:
+            bak_path.write_text(xray_conf_path.read_text(encoding="utf-8"), encoding="utf-8")
+        except Exception:
+            pass
+
+    os.replace(tmp_path, xray_conf_path)
+    logger.info(f"Updated {xray_conf_path} with {len(auto_outbounds)} auto-failover nodes (burstObservatory + leastLoad).")
+
+    try:
+        subprocess.run(["docker", "restart", "xray"], capture_output=True, timeout=20, check=True)
+        logger.info("Restarted Docker container 'xray' cleanly.")
+    except Exception as e:
+        logger.error(f"Failed to restart docker container 'xray': {e}")
+        return False
+
+    return True
+
+
 def main():
     base_dir = Path(__file__).resolve().parent
     env_file = base_dir / ".env"
@@ -841,6 +966,7 @@ def main():
 
     passed_api_nodes = []
     passed_web_nodes = []
+    passed_xray_candidates = []
     total = len(testable_nodes)
 
     logger.info(f"Starting dual Gemini Web & API verification on {total} nodes via Xray & sing-box (15 RPM rate limit)...")
@@ -861,6 +987,9 @@ def main():
             passed_web_nodes.append(tag)
         if api_ok:
             passed_api_nodes.append(tag)
+        if scheme in ("vless", "trojan", "ss") and (web_ok or api_ok):
+            priority = 2 if (web_ok and api_ok) else 1
+            passed_xray_candidates.append((priority, node_uri, tag))
 
         # Enforce rate limit delay between nodes
         if idx < total:
@@ -875,6 +1004,8 @@ def main():
     passed_both_nodes = [t for t in passed_web_nodes if t in passed_api_nodes]
     logger.info(f"Nodes passing BOTH web and API (GEMINI2): {len(passed_both_nodes)}/{total}")
     update_shadowrocket_conf(conf_path, passed_api_nodes, passed_both_nodes)
+    if not quick_check and passed_xray_candidates:
+        update_xray_client_config(passed_xray_candidates)
     
     # ------------------ STATE & NOTIFICATION LOGIC ------------------
     state_file = Path(__file__).resolve().parent / "checker_state.json"
