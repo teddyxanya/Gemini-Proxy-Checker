@@ -115,6 +115,13 @@ logging.basicConfig(
 logger = logging.getLogger("gemini-proxy-checker")
 
 
+def get_telegram_proxies() -> dict:
+    raw = (os.getenv("TELEGRAM_PROXY") or "http://127.0.0.1:1080").strip().strip(' "\'\\')
+    if raw and raw.lower() not in ("none", "direct", "off", "false", ""):
+        return {"http": raw, "https": raw}
+    return None
+
+
 def send_telegram_alert(message: str):
     """Отправляет HTML-сообщение в Telegram через Bot API."""
     token = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -125,7 +132,7 @@ def send_telegram_alert(message: str):
         url = f"https://api.telegram.org/bot{token}/sendMessage"
         requests.post(url, json={"chat_id": chat_id, "text": message,
                                  "parse_mode": "HTML", "disable_web_page_preview": True},
-                      timeout=10)
+                      timeout=10, proxies=get_telegram_proxies())
     except Exception as e:
         logger.error(f"Telegram alert error: {e}")
 

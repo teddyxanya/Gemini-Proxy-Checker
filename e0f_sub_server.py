@@ -424,6 +424,13 @@ def config_to_wireguard_node(conf_text: str, server_name: str, country_code: str
     }
 
 
+def get_telegram_proxies() -> dict:
+    raw = (os.getenv("TELEGRAM_PROXY") or "http://127.0.0.1:1080").strip().strip(' "\'\\')
+    if raw and raw.lower() not in ("none", "direct", "off", "false", ""):
+        return {"http": raw, "https": raw}
+    return None
+
+
 def send_telegram_alert(bot_token: str, chat_id: str, message: str):
     if not bot_token or not chat_id:
         return
@@ -435,7 +442,7 @@ def send_telegram_alert(bot_token: str, chat_id: str, message: str):
             "parse_mode": "HTML",
             "disable_web_page_preview": True
         }
-        requests.post(url, json=payload, timeout=10)
+        requests.post(url, json=payload, timeout=10, proxies=get_telegram_proxies())
     except Exception as e:
         logger.warning(f"Telegram alert error: {e}")
 
@@ -657,8 +664,6 @@ def sync_profile_awg(headers: dict, profile_name: str, awg_servers: list, all_co
                 warn_msg = f"⚠️ Для профиля <b>{profile_name}</b> на сервере <b>{sname}</b> нет свободных слотов ({used}/{lim})."
                 warnings.append(warn_msg)
                 logger.warning(f"[{profile_name}] {warn_msg}")
-                if tg_token and tg_chat:
-                    send_telegram_alert(tg_token, tg_chat, warn_msg)
 
         if conf_to_use:
             node = config_to_wireguard_node(conf_to_use, sname, country_code, sid, profile_name=profile_name)
@@ -1145,11 +1150,14 @@ def telegram_bot_worker():
     logger.info("Telegram Bot worker started.")
     offset = 0
 
+    session = requests.Session()
     try:
         env_vars = load_env()
         tg_tok = env_vars.get("TELEGRAM_BOT_TOKEN")
+        proxies = get_telegram_proxies()
+        session.proxies = proxies or {}
         if tg_tok:
-            requests.post(f"https://api.telegram.org/bot{tg_tok}/deleteWebhook", timeout=10)
+            session.post(f"https://api.telegram.org/bot{tg_tok}/deleteWebhook", timeout=10)
     except Exception:
         pass
 
@@ -1158,17 +1166,20 @@ def telegram_bot_worker():
             env_vars = load_env()
             tg_token = env_vars.get("TELEGRAM_BOT_TOKEN")
             current_chat_id = env_vars.get("TELEGRAM_CHAT_ID")
+            proxies = get_telegram_proxies()
+            session.proxies = proxies or {}
 
             if not tg_token:
                 time.sleep(10)
                 continue
 
-            url = f"https://api.telegram.org/bot{tg_token}/getUpdates?offset={offset}&timeout=25"
-            r = requests.get(url, timeout=30)
+            # timeout=2 keeps polling alive without triggering proxy idle socket disconnects
+            url = f"https://api.telegram.org/bot{tg_token}/getUpdates?offset={offset}&timeout=0"
+            r = session.get(url, timeout=10)
             if r.status_code == 409:
-                logger.warning("Telegram 409 Conflict (webhook active). Deleting webhook...")
+                logger.warning("Telegram 409 Conflict (webhook active or another client). Deleting webhook...")
                 try:
-                    requests.post(f"https://api.telegram.org/bot{tg_token}/deleteWebhook", timeout=10)
+                    session.post(f"https://api.telegram.org/bot{tg_token}/deleteWebhook", timeout=10)
                 except Exception:
                     pass
                 time.sleep(3)
@@ -1195,15 +1206,19 @@ def telegram_bot_worker():
                             logger.info(f"Auto-bound Telegram Chat ID: {chat_id}")
 
                     parts = raw_text.split()
-                    cmd = parts[0].lower() if parts else ""
+                    raw_cmd = parts[0].lower() if parts else ""
+                    # Strip @botusername suffix (e.g. /start@podpisici_bot -> /start)
+                    cmd = raw_cmd.split("@")[0]
                     args = parts[1:] if len(parts) > 1 else []
 
                     res = execute_proxy_command(cmd, args, sender_user_id, chat_id)
                     if res.get("text"):
                         send_telegram_alert(tg_token, chat_id, res["text"])
 
+            time.sleep(1)
+
         except Exception as e:
-            logger.debug(f"Telegram polling exception: {e}")
+            logger.warning(f"Telegram polling error: {e}")
             time.sleep(5)
 
 
@@ -1515,8 +1530,9 @@ def run_server(port: int = 8088):
     t_sync = threading.Thread(target=background_scheduler, args=(1800,), daemon=True)
     t_sync.start()
 
-    # Start Telegram Bot worker only if explicitly enabled (disabled by default to prevent conflict with music-tg-bot)
-    if env_vars.get("ENABLE_SUB_TG_BOT", "false").lower() == "true":
+    # Start Telegram Bot worker (enabled by default if bot token present, or via ENABLE_SUB_TG_BOT)
+    enable_tg = env_vars.get("ENABLE_SUB_TG_BOT", "true").lower() in ("true", "1", "yes")
+    if enable_tg and bot_token:
         t_tg = threading.Thread(target=telegram_bot_worker, daemon=True)
         t_tg.start()
 
